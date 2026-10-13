@@ -474,7 +474,7 @@
   h3 {
     color: var(--ui-heading);
     font-size: calc(1.5rem * var(--card-scale, 1));
-    margin-bottom: 0.5rem;
+    margin-bottom: 0;
     text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.5);
     white-space: nowrap;
     overflow: hidden;
@@ -497,7 +497,7 @@
     color: var(--ui-text);
     font-size: 1.1rem;
     line-height: 1.3;
-    margin-bottom: 1rem;
+    margin: calc(0.3rem * var(--card-scale, 1)) 0 1rem;
     overflow: hidden;
     display: -webkit-box;
     -webkit-line-clamp: 3;

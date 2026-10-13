@@ -510,7 +510,6 @@
     {:else if !hideDescription}
       <div class="desc-skeleton" aria-hidden="true">
         <div class="line" style="width: 92%"></div>
-        <div class="line" style="width: 84%"></div>
         <div class="line" style="width: 68%"></div>
       </div>
     {/if}
@@ -824,6 +823,7 @@
   }
 
   .mod-info > p {
+    margin: calc(0.3rem * var(--card-scale, 1)) 0 0;
     -webkit-line-clamp: 2;
     line-clamp: 2;
     overflow: hidden;
@@ -851,7 +851,7 @@
   .mod-info h3 {
     color: var(--ui-heading);
     font-size: calc(1.5rem * var(--card-scale, 1));
-    margin-bottom: 0.2rem;
+    margin-bottom: 0;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -907,7 +907,7 @@
 
   /* Description skeleton */
   .desc-skeleton {
-    margin-top: 0.2rem;
+    margin-top: calc(0.3rem * var(--card-scale, 1));
   }
   .desc-skeleton .line {
     height: 12px;
