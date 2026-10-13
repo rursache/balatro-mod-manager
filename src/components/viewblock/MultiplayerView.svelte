@@ -931,6 +931,7 @@
     padding: 1.5rem 1rem 2.5rem 0.5rem;
     box-sizing: border-box;
     color: var(--ui-text);
+    font-family: "M6X11", sans-serif;
   }
 
   .mp-header {
@@ -1550,6 +1551,7 @@
     text-align: center;
     box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
     color: var(--ui-text);
+    font-family: "M6X11", sans-serif;
   }
 
   .confirm-modal h3 {
