@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   catalogSourceFields,
+  settingsInstallSource,
   usesCatalogInstall,
   type ArchiveModItem,
 } from "./catalogItems";
@@ -131,5 +132,23 @@ describe("usesCatalogInstall", () => {
         thunderstore: tsInfo("Steamodded-Steamodded"),
       }),
     ).toBe(false);
+  });
+});
+
+describe("settingsInstallSource", () => {
+  const merged = { title: "Foo", source: "merged" } as Mod;
+  it("installs merged mods from the index while Thunderstore is off", () => {
+    expect(settingsInstallSource(merged, false, false)).toBe("index");
+  });
+  it("leaves the choice to the backend otherwise", () => {
+    expect(settingsInstallSource(merged, true, false)).toBeNull();
+    expect(settingsInstallSource(merged, false, true)).toBeNull();
+    expect(
+      settingsInstallSource(
+        { ...merged, source: "thunderstore" },
+        false,
+        false,
+      ),
+    ).toBeNull();
   });
 });

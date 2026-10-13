@@ -21,7 +21,11 @@
     installCatalogEntry,
     installPlanPromptStore,
   } from "../stores/catalogInstall";
-  import { usesCatalogInstall } from "../utils/catalogItems";
+  import {
+    settingsInstallSource,
+    usesCatalogInstall,
+  } from "../utils/catalogItems";
+  import { thunderstoreEnabled } from "../stores/catalogFilters";
 
   let installSteamodded = $state(true);
   let lovelyUpdating = $state(false);
@@ -95,7 +99,10 @@
     if (get(installationStatus)[mod.title]) return;
     if (get(loadingStates2)[mod.title]) return;
     if (usesCatalogInstall(mod)) {
-      await installCatalogEntry(mod, { prompt: false });
+      await installCatalogEntry(mod, {
+        prompt: false,
+        source: settingsInstallSource(mod, get(thunderstoreEnabled), false),
+      });
       return;
     }
     const withUrl = ensureDownloadUrl(mod);

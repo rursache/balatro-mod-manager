@@ -87,3 +87,16 @@ export function usesCatalogInstall(mod: Mod): boolean {
     id !== STEAMODDED_ID,
   );
 }
+
+/**
+ * Explicit source for a catalog install. With Thunderstore turned off a merged mod
+ * that is not installed yet comes from the index, installed mods keep their source
+ */
+export function settingsInstallSource(
+  mod: Mod,
+  thunderstoreEnabled: boolean,
+  installed: boolean,
+): "index" | null {
+  if (thunderstoreEnabled || mod.source !== "merged" || installed) return null;
+  return "index";
+}

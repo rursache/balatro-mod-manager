@@ -25,7 +25,10 @@
     isBrowsableMod,
   } from "../../utils/installedPlaceholders";
   import { passesCatalogFilters } from "../../utils/catalogFilters";
-  import { usesCatalogInstall } from "../../utils/catalogItems";
+  import {
+    settingsInstallSource,
+    usesCatalogInstall,
+  } from "../../utils/catalogItems";
   import { installCatalogEntry } from "../../stores/catalogInstall";
   import {
     hideAiGeneratedMods,
@@ -138,8 +141,13 @@
 
   const installMod = async (mod: Mod) => {
     if (usesCatalogInstall(mod)) {
-      const indexOnly = !$thunderstoreEnabled && mod.source === "merged";
-      await installCatalogEntry(mod, { source: indexOnly ? "index" : null });
+      await installCatalogEntry(mod, {
+        source: settingsInstallSource(
+          mod,
+          $thunderstoreEnabled,
+          Boolean($installationStatus[mod.title]),
+        ),
+      });
       return;
     }
     // Guard: don't allow re-entrancy while already loading

@@ -110,6 +110,7 @@
   import { mapCategories } from "../../utils/categories";
   import {
     catalogSourceFields,
+    settingsInstallSource,
     usesCatalogInstall,
     type ArchiveModItem,
   } from "../../utils/catalogItems";
@@ -1257,8 +1258,11 @@
 
   /** With Thunderstore turned off new installs of merged mods come from the index */
   function installSourceFor(mod: Mod): "index" | null {
-    if ($thunderstoreEnabled || mod.source !== "merged") return null;
-    return $installationStatus[mod.title] ? null : "index";
+    return settingsInstallSource(
+      mod,
+      $thunderstoreEnabled,
+      Boolean($installationStatus[mod.title]),
+    );
   }
 
   interface CachedModItem {
