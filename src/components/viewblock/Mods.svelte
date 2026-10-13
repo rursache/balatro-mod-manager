@@ -2970,9 +2970,7 @@
     <div class="separator"></div>
 
     {#if $currentCategory === "Multiplayer"}
-      <div class="mods-wrapper multiplayer-wrapper default-scrollbar">
-        <MultiplayerView />
-      </div>
+      <MultiplayerView />
     {:else if $modsStore.length === 0 && (isLoading || $catalogLoading || catalogRetryPending) && $currentCategory !== "Installed Mods"}
       <div class="loading-container">
         <p class="loading-text">
@@ -3937,10 +3935,6 @@
   .sync-status.problem {
     color: var(--ui-warning, #fdcf51);
     opacity: 1;
-  }
-
-  .multiplayer-wrapper {
-    overflow-y: auto;
   }
 
   /* Room for the source chips and sync line above the first card row */
