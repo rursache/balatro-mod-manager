@@ -1938,6 +1938,7 @@
     { name: "Installed Mods", icon: Download },
     { name: "Search", icon: Search },
     { name: "Collections", icon: Layers },
+    { name: "Multiplayer", icon: Users },
     { name: "All Mods", icon: LayoutDashboard },
     { name: "Content", icon: FolderHeart },
     { name: "Miscellaneous", icon: BookOpen },
@@ -1946,7 +1947,6 @@
     { name: "Technical", icon: Spade },
     { name: "Resource Packs", icon: FolderHeart },
     { name: "API", icon: Gamepad2 },
-    { name: "Multiplayer", icon: Users },
   ];
 
   const colorPairs = [
