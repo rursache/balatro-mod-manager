@@ -136,8 +136,8 @@ const ZEEBEE_PATCH: u32 = 999_999;
 /// - `version.lua` values such as `1.0.0~BETA-1016c`
 /// - Thunderstore versions `1.1814.0`, plain `0.9.8` and `26.1002.0`
 ///
-/// Betas map to `(1, MMDD, letter index)` exactly like Thunderstore numbers them.
-/// Commit hashes, branch names and other text give None
+/// Betas map to `(1, MMDD, letter index)` exactly like Thunderstore numbers them,
+/// while commit hashes, branch names and other text give None
 pub fn parse_smods_version(version: &str) -> Option<(u32, u32, u32)> {
     let v = version.trim();
     let v = v.strip_prefix(['v', 'V']).unwrap_or(v);

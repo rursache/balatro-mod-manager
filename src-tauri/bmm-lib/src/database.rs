@@ -667,8 +667,8 @@ impl Database {
         Ok(mods)
     }
 
-    /// Records an index install of `name`, replacing any row with that name.
-    /// The row becomes `source = 'index'` without a source_id
+    /// Records an index install of `name`, replacing any row with that name,
+    /// so the row becomes `source = 'index'` without a source_id
     pub fn add_installed_mod(
         &self,
         name: &str,
@@ -834,8 +834,8 @@ impl Database {
         }
     }
 
-    /// Writes `record` as is, replacing any row with the same name or package.
-    /// Used to restore backups
+    /// Writes `record` as is, replacing any row with the same name or package,
+    /// used to restore backups
     pub fn put_installed_mod(&self, record: &InstalledMod) -> Result<(), AppError> {
         let deps_json = serde_json::to_string(&record.dependencies)?;
         self.conn.execute(
