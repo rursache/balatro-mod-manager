@@ -19,6 +19,7 @@
     };
   }
   import { fuzzySearch } from "../../utils/fuzzy";
+  import { sortSearchResults } from "../../utils/sortMods";
   import {
     findInstalledRow,
     indexInstalledRows,
@@ -326,9 +327,11 @@
         showDeprecated: $showDeprecatedMods,
         source: "all" as const,
       };
-      searchResults = results
-        .map((idx) => mods[idx])
-        .filter((m) => m && passesCatalogFilters(m, filters));
+      searchResults = sortSearchResults(
+        results
+          .map((idx) => mods[idx])
+          .filter((m) => m && passesCatalogFilters(m, filters)),
+      );
     } catch (error) {
       console.error("Search failed:", error);
       searchResults = [];

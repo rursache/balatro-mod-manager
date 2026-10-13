@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { sortMods } from "./sortMods";
+import { sortMods, sortSearchResults } from "./sortMods";
 import { SortOption, type Mod } from "../stores/modStore";
 
 const mod = (title: string, last_updated = 0, dir?: string): Mod => ({
@@ -93,5 +93,44 @@ describe("sortMods", () => {
     const input = [mod("b"), mod("a")];
     sortMods(input, SortOption.NameAsc);
     expect(titles(input)).toEqual(["b", "a"]);
+  });
+});
+
+describe("sortSearchResults", () => {
+  it("orders hits by most recent update first", () => {
+    const ranked = [mod("best", 10), mod("good", 30), mod("ok", 20)];
+    expect(titles(sortSearchResults(ranked))).toEqual(["good", "ok", "best"]);
+  });
+
+  it("keeps relevance order for equal update times", () => {
+    const ranked = [mod("z first", 5), mod("a second", 5), mod("newer", 9)];
+    expect(titles(sortSearchResults(ranked))).toEqual([
+      "newer",
+      "z first",
+      "a second",
+    ]);
+  });
+
+  it("puts undated mods last in relevance order", () => {
+    const ranked = [
+      mod("undated best"),
+      mod("dated", 1),
+      { ...mod("nan"), last_updated: Number.NaN },
+      mod("undated worse"),
+      mod("dated newer", 2),
+    ];
+    expect(titles(sortSearchResults(ranked))).toEqual([
+      "dated newer",
+      "dated",
+      "undated best",
+      "nan",
+      "undated worse",
+    ]);
+  });
+
+  it("does not mutate its input", () => {
+    const ranked = [mod("old", 1), mod("new", 2)];
+    sortSearchResults(ranked);
+    expect(titles(ranked)).toEqual(["old", "new"]);
   });
 });

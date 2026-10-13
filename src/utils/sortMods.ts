@@ -44,3 +44,24 @@ export function sortMods(mods: Mod[], sort: SortOption): Mod[] {
       return out;
   }
 }
+
+const updatedAt = (m: Mod) =>
+  typeof m.last_updated === "number" &&
+  Number.isFinite(m.last_updated) &&
+  m.last_updated > 0
+    ? m.last_updated
+    : null;
+
+/** Reorders relevance-ranked search hits newest update first, keeping the relevance order for ties and undated mods */
+export function sortSearchResults(ranked: Mod[]): Mod[] {
+  // Array.prototype.sort is stable, so equal keys keep their relevance order
+  return [...ranked].sort((a, b) => {
+    const au = updatedAt(a);
+    const bu = updatedAt(b);
+    if (au === null || bu === null) {
+      if (au === bu) return 0;
+      return au === null ? 1 : -1;
+    }
+    return bu - au;
+  });
+}
