@@ -1037,6 +1037,17 @@ fn validate_uninstall_path(path: &PathBuf, mods_dirs: &[PathBuf]) -> Result<(), 
         });
     }
 
+    // Path::starts_with is lexical, so `Mods/../..` would otherwise pass
+    if path
+        .components()
+        .any(|c| matches!(c, std::path::Component::ParentDir))
+    {
+        return Err(AppError::PathValidation {
+            path: path.clone(),
+            reason: "Path contains parent directory components".into(),
+        });
+    }
+
     if mods_dirs.iter().any(|mods_dir| path == mods_dir) {
         return Err(AppError::InvalidState(
             "Blocked attempt to delete Mods directory".into(),
@@ -1278,6 +1289,24 @@ mod tests {
 
         let result = validate_uninstall_path(&outside, &[mods_dir]);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_validate_uninstall_path_rejects_parent_dir_escape() {
+        let td = tempfile::tempdir().unwrap();
+        let mods_dir = td.path().join("Mods");
+        std::fs::create_dir_all(mods_dir.join("SomeMod")).unwrap();
+        std::fs::create_dir_all(td.path().join("outside")).unwrap();
+
+        for escape in [
+            mods_dir.join(".."),
+            mods_dir.join("..").join("outside"),
+            mods_dir.join("SomeMod").join("..").join(".."),
+            mods_dir.join("SomeMod").join(".."),
+        ] {
+            let result = validate_uninstall_path(&escape, std::slice::from_ref(&mods_dir));
+            assert!(result.is_err(), "{}", escape.display());
+        }
     }
 
     #[test]
