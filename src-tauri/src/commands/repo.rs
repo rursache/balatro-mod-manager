@@ -1,6 +1,7 @@
 use crate::assets::{THUMB_CACHE_TTL_SECS, ensure_assets_dirs_async, safe_slug};
-use crate::mod_index;
-use crate::models::ArchiveModItem;
+use crate::catalog::{self, CatalogStatus};
+use crate::models::{ArchiveModItem, CatalogSource, ThunderstoreInfo};
+use crate::thunderstore;
 use bmm_lib::errors::AppError;
 use serde::{Deserialize, Serialize};
 
@@ -10,13 +11,83 @@ pub struct ModDetails {
     pub requires_steamodded: bool,
     pub requires_talisman: bool,
     pub repo_url: Option<String>,
+    #[serde(default)]
+    pub source: CatalogSource,
+    #[serde(default)]
+    pub thunderstore: Option<ThunderstoreInfo>,
+    #[serde(default)]
+    pub downloads: Option<u64>,
 }
 
 async fn lookup(dir_name: &str, title: &str) -> Option<ArchiveModItem> {
-    match mod_index::find_item(dir_name).await {
+    match catalog::find_item(dir_name).await {
         Some(item) => Some(item),
-        None => mod_index::find_item(title).await,
+        None => catalog::find_item(title).await,
     }
+}
+
+/// Thumbnail cache key, the catalog id when the caller has one so sources cannot collide
+pub(crate) fn thumb_key(title: &str, id: Option<&str>) -> String {
+    id.map(str::trim)
+        .filter(|id| !id.is_empty())
+        .unwrap_or(title)
+        .to_string()
+}
+
+/// The index `description.md` text, None when the entry only has Thunderstore text
+fn index_description(item: &ArchiveModItem) -> Option<&str> {
+    if item.source == CatalogSource::Thunderstore || item.description.trim().is_empty() {
+        return None;
+    }
+    let from_thunderstore = item
+        .thunderstore
+        .as_ref()
+        .is_some_and(|t| t.description == item.description);
+    (!from_thunderstore).then_some(item.description.as_str())
+}
+
+/// README of the latest version, cached on disk per version
+async fn thunderstore_readme(info: &ThunderstoreInfo) -> Option<String> {
+    let (_, descs_dir) = ensure_assets_dirs_async().await.ok()?;
+    let path = descs_dir.join(format!(
+        "{}@{}.md",
+        safe_slug(&info.full_name),
+        safe_slug(&info.latest_version)
+    ));
+    if let Ok(text) = tokio::fs::read_to_string(&path).await
+        && !text.trim().is_empty()
+    {
+        return Some(text);
+    }
+    match thunderstore::fetch_readme(&info.namespace, &info.name, &info.latest_version).await {
+        Ok(text) if !text.trim().is_empty() => {
+            if let Err(e) = tokio::fs::write(&path, &text).await {
+                log::warn!("Failed to cache README of {}: {e}", info.full_name);
+            }
+            Some(text)
+        }
+        Ok(_) => None,
+        Err(e) => {
+            log::warn!("Failed to fetch README of {}: {e}", info.full_name);
+            None
+        }
+    }
+}
+
+/// Index description, then the Thunderstore README, then the short description
+async fn describe(item: &ArchiveModItem) -> String {
+    if let Some(text) = index_description(item) {
+        return text.to_string();
+    }
+    if let Some(info) = &item.thunderstore {
+        if let Some(readme) = thunderstore_readme(info).await {
+            return readme;
+        }
+        if !info.description.trim().is_empty() {
+            return info.description.clone();
+        }
+    }
+    item.description.clone()
 }
 
 fn repo_url_of(item: &ArchiveModItem) -> Option<String> {
@@ -24,23 +95,34 @@ fn repo_url_of(item: &ArchiveModItem) -> Option<String> {
     (!repo.is_empty()).then(|| repo.to_string())
 }
 
-/// Description, requirements and repo URL of one mod, served from the local index cache
+/// Description, requirements and repo URL of one mod, served from the local catalog cache
+/// (Thunderstore READMEs are fetched once per version)
 #[tauri::command]
 pub async fn get_mod_details(title: String, dir_name: String) -> Result<ModDetails, String> {
     let item = lookup(&dir_name, &title)
         .await
-        .ok_or_else(|| format!("'{title}' was not found in the mod index"))?;
+        .ok_or_else(|| format!("'{title}' was not found in the mod catalog"))?;
     Ok(ModDetails {
-        description: item.description.clone(),
+        description: describe(&item).await,
         requires_steamodded: item.meta.requires_steamodded,
         requires_talisman: item.meta.requires_talisman,
         repo_url: repo_url_of(&item),
+        source: item.source,
+        downloads: item.downloads,
+        thunderstore: item.thunderstore,
     })
 }
 
+/// Merged GitHub index and Thunderstore catalog
 #[tauri::command]
 pub async fn fetch_repo_mods(force: Option<bool>) -> Result<Vec<ArchiveModItem>, String> {
-    mod_index::sync_index(force.unwrap_or(false)).await
+    catalog::sync_all(force.unwrap_or(false)).await
+}
+
+/// Per source sync state of the catalog, never touches the network
+#[tauri::command]
+pub async fn catalog_status() -> Result<CatalogStatus, String> {
+    Ok(catalog::status().await)
 }
 
 async fn is_thumb_fresh_async(path: &std::path::Path) -> bool {
@@ -55,10 +137,14 @@ async fn is_thumb_fresh_async(path: &std::path::Path) -> bool {
     age.as_secs() < THUMB_CACHE_TTL_SECS
 }
 
+/// Cached thumbnail path, keyed by `id` (the catalog id) when given, else by `title`
 #[tauri::command]
-pub async fn get_cached_thumbnail_by_title(title: String) -> Result<Option<String>, String> {
+pub async fn get_cached_thumbnail_by_title(
+    title: String,
+    id: Option<String>,
+) -> Result<Option<String>, String> {
     let (thumbs_dir, _) = ensure_assets_dirs_async().await?;
-    let slug = safe_slug(&title);
+    let slug = safe_slug(&thumb_key(&title, id.as_deref()));
     let path = thumbs_dir.join(format!("{slug}.jpg"));
     if tokio::fs::metadata(&path).await.is_err() {
         return Ok(None);
@@ -74,7 +160,8 @@ pub async fn get_cached_thumbnail_by_title(title: String) -> Result<Option<Strin
     ))
 }
 
-/// Return a map of title -> cached thumbnail path for the given titles (if present).
+/// Map of key -> cached thumbnail path for the given keys (catalog ids, or titles for
+/// thumbnails cached before ids were used)
 #[tauri::command]
 pub async fn get_cached_thumbnails_map(
     titles: Vec<String>,
@@ -103,8 +190,16 @@ pub async fn get_description_cached_or_remote(
 ) -> Result<String, String> {
     let (_, descs_dir) = ensure_assets_dirs_async().await?;
     let path = descs_dir.join(format!("{}.md", safe_slug(&title)));
+    let item = lookup(&dir_name, &title).await;
 
-    if let Some(item) = lookup(&dir_name, &title).await
+    if let Some(item) = &item
+        && index_description(item).is_none()
+        && item.thunderstore.is_some()
+    {
+        return Ok(describe(item).await);
+    }
+
+    if let Some(item) = item
         && !item.description.trim().is_empty()
     {
         let cached = tokio::fs::read_to_string(&path).await.ok();
@@ -121,15 +216,15 @@ pub async fn get_description_cached_or_remote(
 
 #[tauri::command]
 pub async fn get_mod_requirements(dir_name: String) -> Result<(bool, bool), String> {
-    let item = mod_index::find_item(&dir_name)
+    let item = catalog::find_item(&dir_name)
         .await
-        .ok_or_else(|| format!("'{dir_name}' was not found in the mod index"))?;
+        .ok_or_else(|| format!("'{dir_name}' was not found in the mod catalog"))?;
     Ok((item.meta.requires_steamodded, item.meta.requires_talisman))
 }
 
 #[tauri::command]
 pub async fn get_mod_repo_url(dir_name: String) -> Result<Option<String>, String> {
-    Ok(mod_index::find_item(&dir_name)
+    Ok(catalog::find_item(&dir_name)
         .await
         .and_then(|item| repo_url_of(&item)))
 }
@@ -168,6 +263,7 @@ mod tests {
             description: String::new(),
             image_url: String::new(),
             has_thumbnail: false,
+            ..Default::default()
         };
         assert_eq!(repo_url_of(&item), None);
         item.meta.repo = " https://github.com/a/b ".into();
@@ -175,5 +271,40 @@ mod tests {
             repo_url_of(&item).as_deref(),
             Some("https://github.com/a/b")
         );
+    }
+
+    #[test]
+    fn thumb_key_prefers_the_catalog_id() {
+        let ts = thumb_key("Pokermon", Some("ts:PokermonPlus-Pokermon"));
+        assert_eq!(ts, "ts:PokermonPlus-Pokermon");
+        assert_eq!(thumb_key("Pokermon", Some("  ")), "Pokermon");
+        assert_eq!(thumb_key("Pokermon", None), "Pokermon");
+        assert_ne!(
+            safe_slug(&ts),
+            safe_slug(&thumb_key("Pokermon", Some("InertSteak@Pokermon")))
+        );
+    }
+
+    #[test]
+    fn index_description_skips_thunderstore_text() {
+        let info = ThunderstoreInfo {
+            description: "short".into(),
+            ..Default::default()
+        };
+        let mut item = ArchiveModItem {
+            description: "from index".into(),
+            source: CatalogSource::Merged,
+            thunderstore: Some(info),
+            ..Default::default()
+        };
+        assert_eq!(index_description(&item), Some("from index"));
+        item.description = "short".into();
+        assert_eq!(index_description(&item), None);
+        item.description = "anything".into();
+        item.source = CatalogSource::Thunderstore;
+        assert_eq!(index_description(&item), None);
+        item.source = CatalogSource::Index;
+        item.description = " ".into();
+        assert_eq!(index_description(&item), None);
     }
 }

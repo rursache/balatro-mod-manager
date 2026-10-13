@@ -283,7 +283,7 @@ pub async fn reset_database(state: tauri::State<'_, AppState>) -> Result<(), Str
 /// they live in the SQLite database, not in these caches.
 #[tauri::command]
 pub async fn clear_app_state() -> Result<(), String> {
-    crate::mod_index::reset_cache().await;
+    crate::catalog::reset_cache().await;
     let config_dir = dirs::config_dir().ok_or_else(|| "config directory not found".to_string())?;
     let balatro = config_dir.join("Balatro");
 

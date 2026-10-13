@@ -45,8 +45,57 @@ pub struct ModMeta {
     pub last_updated: u64,
 }
 
+/// Where a catalog entry comes from
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CatalogSource {
+    #[default]
+    Index,
+    Thunderstore,
+    Merged,
+}
+
+/// One published version of a Thunderstore package
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ThunderstoreVersionInfo {
+    #[serde(default)]
+    pub version: String,
+    #[serde(default)]
+    pub deps: Vec<String>,
+    #[serde(default)]
+    pub date: String,
+    #[serde(default)]
+    pub size: u64,
+}
+
+/// Thunderstore side of a catalog entry
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ThunderstoreInfo {
+    pub namespace: String,
+    pub name: String,
+    pub full_name: String,
+    pub owner: String,
+    pub package_url: String,
+    pub latest_version: String,
+    /// Active versions, newest first
+    pub versions: Vec<ThunderstoreVersionInfo>,
+    pub download_url: String,
+    pub website_url: String,
+    pub icon_url: String,
+    pub downloads_total: u64,
+    pub rating: i64,
+    pub deprecated: bool,
+    pub nsfw: bool,
+    pub ai_generated: bool,
+    pub categories_raw: Vec<String>,
+    pub date_updated: String,
+    /// Short description of the latest version, the README is fetched lazily
+    pub description: String,
+}
+
 /// One catalog entry as consumed by the frontend
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct ArchiveModItem {
     pub dir_name: String,
     pub meta: ModMeta,
@@ -54,6 +103,12 @@ pub struct ArchiveModItem {
     pub image_url: String,
     #[serde(default)]
     pub has_thumbnail: bool,
+    #[serde(default)]
+    pub source: CatalogSource,
+    #[serde(default)]
+    pub thunderstore: Option<ThunderstoreInfo>,
+    #[serde(default)]
+    pub downloads: Option<u64>,
 }
 
 fn string_or_number<'de, D>(deserializer: D) -> Result<String, D::Error>
@@ -100,5 +155,30 @@ mod tests {
         assert_eq!(value["last-updated"], 5);
         assert!(value.get("requires-steamodded").is_some());
         assert!(value.get("downloadURL").is_some());
+    }
+
+    #[test]
+    fn archive_item_from_an_old_cache_gets_source_defaults() {
+        let item: ArchiveModItem = serde_json::from_value(json!({
+            "dir_name": "A@B",
+            "meta": {"title": "B"},
+            "description": "",
+            "image_url": ""
+        }))
+        .expect("parse");
+        assert_eq!(item.source, CatalogSource::Index);
+        assert!(item.thunderstore.is_none());
+        assert_eq!(item.downloads, None);
+        let value = serde_json::to_value(&item).expect("serialize");
+        assert_eq!(value["source"], "index");
+    }
+
+    #[test]
+    fn thunderstore_info_tolerates_missing_fields() {
+        let info: ThunderstoreInfo =
+            serde_json::from_value(json!({"full_name": "a-b", "nsfw": true})).expect("parse");
+        assert_eq!(info.full_name, "a-b");
+        assert!(info.nsfw);
+        assert!(info.versions.is_empty());
     }
 }

@@ -1,0 +1,813 @@
+[
+ {
+  "name": "Steamodded",
+  "full_name": "Steamodded-Steamodded",
+  "owner": "Steamodded",
+  "package_url": "https://thunderstore.io/c/balatro/p/Steamodded/Steamodded/",
+  "donation_link": null,
+  "date_created": "2024-07-03T22:40:48.756144+00:00",
+  "date_updated": "2026-10-02T20:51:59.547381+00:00",
+  "uuid4": "935bea81-8ab6-45be-b592-9fad1f6cebf3",
+  "rating_score": 7,
+  "is_pinned": true,
+  "is_deprecated": false,
+  "has_nsfw_content": false,
+  "categories": [
+   "Mods",
+   "Tools",
+   "Libraries"
+  ],
+  "versions": [
+   {
+    "name": "Steamodded",
+    "full_name": "Steamodded-Steamodded-26.1002.0",
+    "description": "A Balatro Modding Framework",
+    "icon": "https://ccdn.thunderstore.io/live/repository/icons/Steamodded-Steamodded-26.1002.0.png",
+    "version_number": "26.1002.0",
+    "dependencies": [
+     "Thunderstore-lovely-0.9.0"
+    ],
+    "download_url": "https://thunderstore.io/package/download/Steamodded/Steamodded/26.1002.0/",
+    "downloads": 6030,
+    "date_created": "2026-10-02T20:51:59.079625+00:00",
+    "website_url": "https://smods.dev",
+    "is_active": true,
+    "uuid4": "93470b4a-7ae4-4fb3-a20d-9e7307536c3b",
+    "file_size": 769905
+   },
+   {
+    "name": "Steamodded",
+    "full_name": "Steamodded-Steamodded-26.829.0",
+    "description": "A Balatro Modding Framework",
+    "icon": "https://ccdn.thunderstore.io/live/repository/icons/Steamodded-Steamodded-26.829.0.png",
+    "version_number": "26.829.0",
+    "dependencies": [
+     "Thunderstore-lovely-0.9.0"
+    ],
+    "download_url": "https://thunderstore.io/package/download/Steamodded/Steamodded/26.829.0/",
+    "downloads": 7735,
+    "date_created": "2026-08-29T20:46:45.597331+00:00",
+    "website_url": "https://smods.dev",
+    "is_active": true,
+    "uuid4": "13971161-2a70-4440-90bd-c6def7c4815c",
+    "file_size": 762215
+   },
+   {
+    "name": "Steamodded",
+    "full_name": "Steamodded-Steamodded-1.1814.0",
+    "description": "A Balatro Modding Framework",
+    "icon": "https://ccdn.thunderstore.io/live/repository/icons/Steamodded-Steamodded-1.1814.0.png",
+    "version_number": "1.1814.0",
+    "dependencies": [
+     "Thunderstore-lovely-0.9.0"
+    ],
+    "download_url": "https://thunderstore.io/package/download/Steamodded/Steamodded/1.1814.0/",
+    "downloads": 1192,
+    "date_created": "2026-08-20T05:14:33.653442+00:00",
+    "website_url": "https://smods.dev",
+    "is_active": true,
+    "uuid4": "df1f6d15-9664-4183-b07e-871abfadfa76",
+    "file_size": 715690
+   }
+  ]
+ },
+ {
+  "name": "Steamodded",
+  "full_name": "Steamopollys-Steamodded",
+  "owner": "Steamopollys",
+  "package_url": "https://thunderstore.io/c/balatro/p/Steamopollys/Steamodded/",
+  "donation_link": null,
+  "date_created": "2024-03-26T03:03:48.957598+00:00",
+  "date_updated": "2024-07-03T22:49:26.060007+00:00",
+  "uuid4": "9893dc39-fe75-462d-bcaa-88004fe2a619",
+  "rating_score": 4,
+  "is_pinned": false,
+  "is_deprecated": true,
+  "has_nsfw_content": false,
+  "categories": [
+   "Mods",
+   "Tools",
+   "Libraries",
+   "Misc"
+  ],
+  "versions": [
+   {
+    "name": "Steamodded",
+    "full_name": "Steamopollys-Steamodded-0.9.81",
+    "description": "A Balatro ModLoader",
+    "icon": "https://ccdn.thunderstore.io/live/repository/icons/Steamopollys-Steamodded-0.9.81.png",
+    "version_number": "0.9.81",
+    "dependencies": [
+     "metherul-nativefs-1.0.1",
+     "Thunderstore-lovely-0.4.0"
+    ],
+    "download_url": "https://thunderstore.io/package/download/Steamopollys/Steamodded/0.9.81/",
+    "downloads": 59703,
+    "date_created": "2024-07-03T22:49:25.661272+00:00",
+    "website_url": "https://github.com/Steamopollys/Steamodded",
+    "is_active": true,
+    "uuid4": "fed7baf6-9bf4-4459-b083-b3d8b5d58d7d",
+    "file_size": 130485
+   },
+   {
+    "name": "Steamodded",
+    "full_name": "Steamopollys-Steamodded-0.9.8",
+    "description": "A Balatro ModLoader",
+    "icon": "https://ccdn.thunderstore.io/live/repository/icons/Steamopollys-Steamodded-0.9.8.png",
+    "version_number": "0.9.8",
+    "dependencies": [
+     "metherul-nativefs-1.0.0",
+     "Thunderstore-lovely-0.3.1"
+    ],
+    "download_url": "https://thunderstore.io/package/download/Steamopollys/Steamodded/0.9.8/",
+    "downloads": 3582,
+    "date_created": "2024-04-07T17:26:58.480598+00:00",
+    "website_url": "https://github.com/Steamopollys/Steamodded",
+    "is_active": true,
+    "uuid4": "bbc77d4b-96f2-4b8d-8d2b-551f18383580",
+    "file_size": 6769452
+   },
+   {
+    "name": "Steamodded",
+    "full_name": "Steamopollys-Steamodded-0.9.5",
+    "description": "A Balatro ModLoader",
+    "icon": "https://ccdn.thunderstore.io/live/repository/icons/Steamopollys-Steamodded-0.9.5.png",
+    "version_number": "0.9.5",
+    "dependencies": [
+     "metherul-nativefs-1.0.0",
+     "Thunderstore-lovely-0.3.1"
+    ],
+    "download_url": "https://thunderstore.io/package/download/Steamopollys/Steamodded/0.9.5/",
+    "downloads": 574,
+    "date_created": "2024-04-02T21:28:28.484189+00:00",
+    "website_url": "https://github.com/Steamopollys/Steamodded",
+    "is_active": true,
+    "uuid4": "c0d24d45-5c79-4ec8-b709-74cfe61ca172",
+    "file_size": 5271524
+   }
+  ]
+ },
+ {
+  "name": "lovely",
+  "full_name": "Thunderstore-lovely",
+  "owner": "Thunderstore",
+  "package_url": "https://thunderstore.io/c/balatro/p/Thunderstore/lovely/",
+  "donation_link": null,
+  "date_created": "2024-03-25T12:28:11.355354+00:00",
+  "date_updated": "2026-09-23T15:24:57.452413+00:00",
+  "uuid4": "a7b0b713-eb5e-48d3-9efb-40e5647692d1",
+  "rating_score": 14,
+  "is_pinned": true,
+  "is_deprecated": false,
+  "has_nsfw_content": false,
+  "categories": [
+   "Tools",
+   "Libraries"
+  ],
+  "versions": [
+   {
+    "name": "lovely",
+    "full_name": "Thunderstore-lovely-0.10.0",
+    "description": "Lovely is a runtime lua injector for LÖVE 2d",
+    "icon": "https://ccdn.thunderstore.io/live/repository/icons/Thunderstore-lovely-0.10.0.png",
+    "version_number": "0.10.0",
+    "dependencies": [],
+    "download_url": "https://thunderstore.io/package/download/Thunderstore/lovely/0.10.0/",
+    "downloads": 7742,
+    "date_created": "2026-09-23T15:24:56.684655+00:00",
+    "website_url": "https://github.com/ethangreen-dev/lovely-injector",
+    "is_active": true,
+    "uuid4": "102555bd-4d61-44cc-b19d-06e6075f29e7",
+    "file_size": 2073249
+   },
+   {
+    "name": "lovely",
+    "full_name": "Thunderstore-lovely-0.9.0",
+    "description": "Lovely is a runtime lua injector for LÖVE 2d",
+    "icon": "https://ccdn.thunderstore.io/live/repository/icons/Thunderstore-lovely-0.9.0.png",
+    "version_number": "0.9.0",
+    "dependencies": [],
+    "download_url": "https://thunderstore.io/package/download/Thunderstore/lovely/0.9.0/",
+    "downloads": 26082,
+    "date_created": "2026-01-21T23:40:11.902406+00:00",
+    "website_url": "https://github.com/ethangreen-dev/lovely-injector",
+    "is_active": true,
+    "uuid4": "cd1835e6-07a1-42ca-8e09-d08f9a34b2e7",
+    "file_size": 1824901
+   },
+   {
+    "name": "lovely",
+    "full_name": "Thunderstore-lovely-0.8.0",
+    "description": "Lovely is a runtime lua injector for LÖVE 2d",
+    "icon": "https://ccdn.thunderstore.io/live/repository/icons/Thunderstore-lovely-0.8.0.png",
+    "version_number": "0.8.0",
+    "dependencies": [],
+    "download_url": "https://thunderstore.io/package/download/Thunderstore/lovely/0.8.0/",
+    "downloads": 32470,
+    "date_created": "2025-06-07T19:42:01.670204+00:00",
+    "website_url": "https://github.com/ethangreen-dev/lovely-injector",
+    "is_active": true,
+    "uuid4": "4b668c12-cdf3-4962-ac0b-a515063770d7",
+    "file_size": 1453279
+   }
+  ]
+ },
+ {
+  "name": "Multiplayer",
+  "full_name": "BalatroMultiplayer-Multiplayer",
+  "owner": "BalatroMultiplayer",
+  "package_url": "https://thunderstore.io/c/balatro/p/BalatroMultiplayer/Multiplayer/",
+  "donation_link": "https://ko-fi.com/virtualized",
+  "date_created": "2026-09-09T05:29:58.624010+00:00",
+  "date_updated": "2026-09-09T06:34:29.784954+00:00",
+  "uuid4": "a6cbb6e2-3ab0-4287-b35f-0d35f68518cb",
+  "rating_score": 1,
+  "is_pinned": false,
+  "is_deprecated": false,
+  "has_nsfw_content": false,
+  "categories": [
+   "Mods",
+   "AI Generated"
+  ],
+  "versions": [
+   {
+    "name": "Multiplayer",
+    "full_name": "BalatroMultiplayer-Multiplayer-0.5.7",
+    "description": "Legacy standalone Balatro Multiplayer mod. Allows players to compete with their friends! Superseded by, and conflicts with, MultiplayerAPI.",
+    "icon": "https://ccdn.thunderstore.io/live/repository/icons/BalatroMultiplayer-Multiplayer-0.5.7.png",
+    "version_number": "0.5.7",
+    "dependencies": [
+     "Steamodded-Steamodded-1.1620.0"
+    ],
+    "download_url": "https://thunderstore.io/package/download/BalatroMultiplayer/Multiplayer/0.5.7/",
+    "downloads": 3286,
+    "date_created": "2026-09-09T06:34:29.122497+00:00",
+    "website_url": "https://github.com/Balatro-Multiplayer/BalatroMultiplayer",
+    "is_active": true,
+    "uuid4": "a04b7c4f-80c0-497e-9706-7cd348f411c9",
+    "file_size": 3618473
+   },
+   {
+    "name": "Multiplayer",
+    "full_name": "BalatroMultiplayer-Multiplayer-0.5.6",
+    "description": "Legacy standalone Balatro Multiplayer mod. Allows players to compete with their friends! Superseded by, and conflicts with, MultiplayerAPI.",
+    "icon": "https://ccdn.thunderstore.io/live/repository/icons/BalatroMultiplayer-Multiplayer-0.5.6.png",
+    "version_number": "0.5.6",
+    "dependencies": [
+     "Steamodded-Steamodded-1.1620.0"
+    ],
+    "download_url": "https://thunderstore.io/package/download/BalatroMultiplayer/Multiplayer/0.5.6/",
+    "downloads": 87,
+    "date_created": "2026-09-09T06:24:01.479067+00:00",
+    "website_url": "https://github.com/Balatro-Multiplayer/BalatroMultiplayer",
+    "is_active": true,
+    "uuid4": "565d8f61-de77-4790-867a-6094e0d193fa",
+    "file_size": 3622048
+   },
+   {
+    "name": "Multiplayer",
+    "full_name": "BalatroMultiplayer-Multiplayer-0.5.5",
+    "description": "Legacy standalone Balatro Multiplayer mod. Allows players to compete with their friends! Superseded by, and conflicts with, MultiplayerAPI.",
+    "icon": "https://ccdn.thunderstore.io/live/repository/icons/BalatroMultiplayer-Multiplayer-0.5.5.png",
+    "version_number": "0.5.5",
+    "dependencies": [
+     "Steamodded-Steamodded-1.1620.0"
+    ],
+    "download_url": "https://thunderstore.io/package/download/BalatroMultiplayer/Multiplayer/0.5.5/",
+    "downloads": 247,
+    "date_created": "2026-09-09T05:34:04.069789+00:00",
+    "website_url": "https://github.com/Balatro-Multiplayer/BalatroMultiplayer",
+    "is_active": true,
+    "uuid4": "b61c5e7d-3343-427e-ae93-75f115ec0dee",
+    "file_size": 3626596
+   }
+  ]
+ },
+ {
+  "name": "MultiplayerAPI",
+  "full_name": "BalatroMultiplayer-MultiplayerAPI",
+  "owner": "BalatroMultiplayer",
+  "package_url": "https://thunderstore.io/c/balatro/p/BalatroMultiplayer/MultiplayerAPI/",
+  "donation_link": "https://ko-fi.com/virtualized",
+  "date_created": "2026-09-09T05:56:49.460548+00:00",
+  "date_updated": "2026-09-09T06:35:28.177367+00:00",
+  "uuid4": "4929aa14-0182-4bb0-9372-9d0dd43ceadb",
+  "rating_score": 1,
+  "is_pinned": false,
+  "is_deprecated": false,
+  "has_nsfw_content": false,
+  "categories": [
+   "Libraries",
+   "AI Generated"
+  ],
+  "versions": [
+   {
+    "name": "MultiplayerAPI",
+    "full_name": "BalatroMultiplayer-MultiplayerAPI-0.1.2",
+    "description": "Multiplayer library and API for Balatro.",
+    "icon": "https://ccdn.thunderstore.io/live/repository/icons/BalatroMultiplayer-MultiplayerAPI-0.1.2.png",
+    "version_number": "0.1.2",
+    "dependencies": [
+     "Steamodded-Steamodded-1.1814.0"
+    ],
+    "download_url": "https://thunderstore.io/package/download/BalatroMultiplayer/MultiplayerAPI/0.1.2/",
+    "downloads": 1469,
+    "date_created": "2026-09-09T06:35:27.083705+00:00",
+    "website_url": "https://github.com/Balatro-Multiplayer/BalatroMultiplayerAPI",
+    "is_active": true,
+    "uuid4": "1b74f593-709c-4fb6-bc11-e157c72cb685",
+    "file_size": 7642532
+   },
+   {
+    "name": "MultiplayerAPI",
+    "full_name": "BalatroMultiplayer-MultiplayerAPI-0.1.1",
+    "description": "Multiplayer library and API for Balatro. Bundles the OpenSSL runtime (libssl/libcrypto) MQTT networking needs, so it works standalone without the BET launcher.",
+    "icon": "https://ccdn.thunderstore.io/live/repository/icons/BalatroMultiplayer-MultiplayerAPI-0.1.1.png",
+    "version_number": "0.1.1",
+    "dependencies": [
+     "Steamodded-Steamodded-1.1814.0"
+    ],
+    "download_url": "https://thunderstore.io/package/download/BalatroMultiplayer/MultiplayerAPI/0.1.1/",
+    "downloads": 43,
+    "date_created": "2026-09-09T06:25:16.760228+00:00",
+    "website_url": "https://github.com/Balatro-Multiplayer/BalatroMultiplayerAPI",
+    "is_active": true,
+    "uuid4": "8bcae238-d555-4d49-9801-38a44151b1e8",
+    "file_size": 7646882
+   },
+   {
+    "name": "MultiplayerAPI",
+    "full_name": "BalatroMultiplayer-MultiplayerAPI-0.1.0",
+    "description": "Multiplayer library and API for Balatro. Bundles the OpenSSL runtime (libssl/libcrypto) MQTT networking needs, so it works standalone without the BET launcher.",
+    "icon": "https://ccdn.thunderstore.io/live/repository/icons/BalatroMultiplayer-MultiplayerAPI-0.1.0.png",
+    "version_number": "0.1.0",
+    "dependencies": [
+     "Steamodded-Steamodded-1.1814.0"
+    ],
+    "download_url": "https://thunderstore.io/package/download/BalatroMultiplayer/MultiplayerAPI/0.1.0/",
+    "downloads": 131,
+    "date_created": "2026-09-09T05:58:10.668234+00:00",
+    "website_url": "https://github.com/Balatro-Multiplayer/BalatroMultiplayerAPI",
+    "is_active": true,
+    "uuid4": "393082a5-a5a0-4027-9dda-787a4628024f",
+    "file_size": 7832086
+   }
+  ]
+ },
+ {
+  "name": "MultiplayerSpeedrun",
+  "full_name": "BalatroMultiplayer-MultiplayerSpeedrun",
+  "owner": "BalatroMultiplayer",
+  "package_url": "https://thunderstore.io/c/balatro/p/BalatroMultiplayer/MultiplayerSpeedrun/",
+  "donation_link": "https://ko-fi.com/virtualized",
+  "date_created": "2026-09-09T06:26:33.445480+00:00",
+  "date_updated": "2026-09-09T06:27:31.372605+00:00",
+  "uuid4": "b4e0e29d-ed6d-4c5b-a6b3-0186144272ec",
+  "rating_score": 1,
+  "is_pinned": false,
+  "is_deprecated": false,
+  "has_nsfw_content": false,
+  "categories": [
+   "Mods",
+   "AI Generated"
+  ],
+  "versions": [
+   {
+    "name": "MultiplayerSpeedrun",
+    "full_name": "BalatroMultiplayer-MultiplayerSpeedrun-0.1.1",
+    "description": "Real-time speedrunning gamemodes, leaderboard, and timer tracking built on top of MultiplayerAPI.",
+    "icon": "https://ccdn.thunderstore.io/live/repository/icons/BalatroMultiplayer-MultiplayerSpeedrun-0.1.1.png",
+    "version_number": "0.1.1",
+    "dependencies": [
+     "BalatroMultiplayer-MultiplayerAPI-0.1.1",
+     "Steamodded-Steamodded-1.1814.0"
+    ],
+    "download_url": "https://thunderstore.io/package/download/BalatroMultiplayer/MultiplayerSpeedrun/0.1.1/",
+    "downloads": 552,
+    "date_created": "2026-09-09T06:27:30.934119+00:00",
+    "website_url": "https://github.com/Balatro-Multiplayer/BalatroMultiplayerSpeedrun",
+    "is_active": true,
+    "uuid4": "158dca5d-7e8c-48b0-a35a-76f547ad8de8",
+    "file_size": 172118
+   }
+  ]
+ },
+ {
+  "name": "Pokermon",
+  "full_name": "Pokermon-Pokermon",
+  "owner": "Pokermon",
+  "package_url": "https://thunderstore.io/c/balatro/p/Pokermon/Pokermon/",
+  "donation_link": null,
+  "date_created": "2026-10-06T21:56:41.534460+00:00",
+  "date_updated": "2026-10-06T21:59:39.815991+00:00",
+  "uuid4": "68649004-4372-4609-b37d-a5d053388096",
+  "rating_score": 1,
+  "is_pinned": false,
+  "is_deprecated": false,
+  "has_nsfw_content": false,
+  "categories": [
+   "Content Mods",
+   "New Mechanics"
+  ],
+  "versions": [
+   {
+    "name": "Pokermon",
+    "full_name": "Pokermon-Pokermon-3.9.1",
+    "description": "A full content Balatro mod where every joker is a Pokemon.",
+    "icon": "https://ccdn.thunderstore.io/live/repository/icons/Pokermon-Pokermon-3.9.1.png",
+    "version_number": "3.9.1",
+    "dependencies": [
+     "Steamodded-Steamodded-26.829.0",
+     "Thunderstore-lovely-0.9.0"
+    ],
+    "download_url": "https://thunderstore.io/package/download/Pokermon/Pokermon/3.9.1/",
+    "downloads": 565,
+    "date_created": "2026-10-06T21:59:37.355780+00:00",
+    "website_url": "https://github.com/InertSteak/Pokermon",
+    "is_active": true,
+    "uuid4": "be13b0e1-74f2-460a-87eb-a8c367a8435a",
+    "file_size": 55804393
+   }
+  ]
+ },
+ {
+  "name": "Pokermon",
+  "full_name": "PokermonPlus-Pokermon",
+  "owner": "PokermonPlus",
+  "package_url": "https://thunderstore.io/c/balatro/p/PokermonPlus/Pokermon/",
+  "donation_link": null,
+  "date_created": "2026-10-12T19:22:26.227671+00:00",
+  "date_updated": "2026-10-12T19:23:21.214884+00:00",
+  "uuid4": "fe4efbba-8392-4fb2-a9cf-3f51550399c3",
+  "rating_score": 0,
+  "is_pinned": false,
+  "is_deprecated": true,
+  "has_nsfw_content": false,
+  "categories": [
+   "Content Mods"
+  ],
+  "versions": [
+   {
+    "name": "Pokermon",
+    "full_name": "PokermonPlus-Pokermon-1.2.0",
+    "description": "An add-on mod for Pokermon.",
+    "icon": "https://ccdn.thunderstore.io/live/repository/icons/PokermonPlus-Pokermon-1.2.0.png",
+    "version_number": "1.2.0",
+    "dependencies": [
+     "Pokermon-Pokermon-3.9.1",
+     "Steamodded-Steamodded-26.829.0",
+     "Thunderstore-lovely-0.9.0"
+    ],
+    "download_url": "https://thunderstore.io/package/download/PokermonPlus/Pokermon/1.2.0/",
+    "downloads": 0,
+    "date_created": "2026-10-12T19:23:20.683572+00:00",
+    "website_url": "https://github.com/SonfiveTV/PokermonPlus",
+    "is_active": true,
+    "uuid4": "384ed384-7ef1-4012-ade1-c2d5a6b5f496",
+    "file_size": 613172
+   }
+  ]
+ },
+ {
+  "name": "Amulet",
+  "full_name": "just_frostice482-Amulet",
+  "owner": "just_frostice482",
+  "package_url": "https://thunderstore.io/c/balatro/p/just_frostice482/Amulet/",
+  "donation_link": null,
+  "date_created": "2025-12-22T16:15:37.919853+00:00",
+  "date_updated": "2026-09-19T03:28:03.173886+00:00",
+  "uuid4": "6da0bbdc-1ed8-4066-a70a-590edbdaf9d9",
+  "rating_score": 2,
+  "is_pinned": false,
+  "is_deprecated": false,
+  "has_nsfw_content": false,
+  "categories": [
+   "Mods",
+   "Misc"
+  ],
+  "versions": [
+   {
+    "name": "Amulet",
+    "full_name": "just_frostice482-Amulet-3.6.1",
+    "description": "A mod to enhance high scoring runs - Fork of Talisman",
+    "icon": "https://ccdn.thunderstore.io/live/repository/icons/just_frostice482-Amulet-3.6.1.png",
+    "version_number": "3.6.1",
+    "dependencies": [
+     "Thunderstore-lovely-0.8.0"
+    ],
+    "download_url": "https://thunderstore.io/package/download/just_frostice482/Amulet/3.6.1/",
+    "downloads": 4536,
+    "date_created": "2026-09-19T03:28:02.583032+00:00",
+    "website_url": "https://github.com/frostice482/amulet",
+    "is_active": true,
+    "uuid4": "ba6a21da-0173-44f0-8cce-327bd00a85e3",
+    "file_size": 849142
+   },
+   {
+    "name": "Amulet",
+    "full_name": "just_frostice482-Amulet-3.6.0",
+    "description": "A mod to enhance high scoring runs - Fork of Talisman",
+    "icon": "https://ccdn.thunderstore.io/live/repository/icons/just_frostice482-Amulet-3.6.0.png",
+    "version_number": "3.6.0",
+    "dependencies": [
+     "Thunderstore-lovely-0.8.0"
+    ],
+    "download_url": "https://thunderstore.io/package/download/just_frostice482/Amulet/3.6.0/",
+    "downloads": 766,
+    "date_created": "2026-09-10T08:38:10.533201+00:00",
+    "website_url": "https://github.com/frostice482/amulet",
+    "is_active": true,
+    "uuid4": "cd1408e6-26ec-41fa-810d-0a86ff874d28",
+    "file_size": 695121
+   },
+   {
+    "name": "Amulet",
+    "full_name": "just_frostice482-Amulet-3.5.4",
+    "description": "A mod to enhance high scoring runs - Fork of Talisman",
+    "icon": "https://ccdn.thunderstore.io/live/repository/icons/just_frostice482-Amulet-3.5.4.png",
+    "version_number": "3.5.4",
+    "dependencies": [
+     "Thunderstore-lovely-0.8.0"
+    ],
+    "download_url": "https://thunderstore.io/package/download/just_frostice482/Amulet/3.5.4/",
+    "downloads": 1107,
+    "date_created": "2026-08-10T12:24:10.626755+00:00",
+    "website_url": "https://github.com/frostice482/amulet",
+    "is_active": true,
+    "uuid4": "98932df6-51b5-4eae-aa97-5286f93a411b",
+    "file_size": 527803
+   }
+  ]
+ },
+ {
+  "name": "JokerDisplay",
+  "full_name": "nh6574-JokerDisplay",
+  "owner": "nh6574",
+  "package_url": "https://thunderstore.io/c/balatro/p/nh6574/JokerDisplay/",
+  "donation_link": "https://ko-fi.com/nh6574",
+  "date_created": "2026-01-17T21:44:25.952408+00:00",
+  "date_updated": "2026-10-05T23:13:43.415165+00:00",
+  "uuid4": "16da1074-2334-41b9-bdae-c0e106d57a97",
+  "rating_score": 8,
+  "is_pinned": false,
+  "is_deprecated": false,
+  "has_nsfw_content": false,
+  "categories": [
+   "Mods",
+   "Libraries",
+   "Quality of Life"
+  ],
+  "versions": [
+   {
+    "name": "JokerDisplay",
+    "full_name": "nh6574-JokerDisplay-2.0.5",
+    "description": "Display useful information under Jokers",
+    "icon": "https://ccdn.thunderstore.io/live/repository/icons/nh6574-JokerDisplay-2.0.5.png",
+    "version_number": "2.0.5",
+    "dependencies": [
+     "Thunderstore-lovely-0.9.0"
+    ],
+    "download_url": "https://thunderstore.io/package/download/nh6574/JokerDisplay/2.0.5/",
+    "downloads": 2311,
+    "date_created": "2026-10-05T23:13:42.862640+00:00",
+    "website_url": "https://github.nh6574.com/JokerDisplay",
+    "is_active": true,
+    "uuid4": "d2f25f36-f199-41b4-b786-fe8ddbf61121",
+    "file_size": 2396043
+   },
+   {
+    "name": "JokerDisplay",
+    "full_name": "nh6574-JokerDisplay-2.0.4",
+    "description": "Display useful information under Jokers",
+    "icon": "https://ccdn.thunderstore.io/live/repository/icons/nh6574-JokerDisplay-2.0.4.png",
+    "version_number": "2.0.4",
+    "dependencies": [
+     "Thunderstore-lovely-0.9.0"
+    ],
+    "download_url": "https://thunderstore.io/package/download/nh6574/JokerDisplay/2.0.4/",
+    "downloads": 3032,
+    "date_created": "2026-09-23T20:31:49.810272+00:00",
+    "website_url": "https://github.nh6574.com/JokerDisplay",
+    "is_active": true,
+    "uuid4": "e0fcdabc-15e8-44db-a2e6-d8309be2ce0d",
+    "file_size": 2396016
+   },
+   {
+    "name": "JokerDisplay",
+    "full_name": "nh6574-JokerDisplay-2.0.3",
+    "description": "Display useful information under Jokers",
+    "icon": "https://ccdn.thunderstore.io/live/repository/icons/nh6574-JokerDisplay-2.0.3.png",
+    "version_number": "2.0.3",
+    "dependencies": [
+     "Thunderstore-lovely-0.9.0"
+    ],
+    "download_url": "https://thunderstore.io/package/download/nh6574/JokerDisplay/2.0.3/",
+    "downloads": 922,
+    "date_created": "2026-09-16T18:34:01.657001+00:00",
+    "website_url": "https://github.nh6574.com/JokerDisplay",
+    "is_active": true,
+    "uuid4": "3515b69a-edd6-43cb-9ed4-ff821c2faf0e",
+    "file_size": 2396015
+   }
+  ]
+ },
+ {
+  "name": "Cryptid",
+  "full_name": "spectralpack-Cryptid",
+  "owner": "spectralpack",
+  "package_url": "https://thunderstore.io/c/balatro/p/spectralpack/Cryptid/",
+  "donation_link": null,
+  "date_created": "2026-08-24T16:18:58.857052+00:00",
+  "date_updated": "2026-08-24T16:19:01.987934+00:00",
+  "uuid4": "224a0be2-1d52-40be-82f1-41f7b6338de6",
+  "rating_score": 2,
+  "is_pinned": false,
+  "is_deprecated": false,
+  "has_nsfw_content": false,
+  "categories": [
+   "Mods"
+  ],
+  "versions": [
+   {
+    "name": "Cryptid",
+    "full_name": "spectralpack-Cryptid-0.5.17",
+    "description": "Adds unbalanced ideas to Balatro.",
+    "icon": "https://ccdn.thunderstore.io/live/repository/icons/spectralpack-Cryptid-0.5.17.png",
+    "version_number": "0.5.17",
+    "dependencies": [
+     "just_frostice482-Amulet-3.5.4",
+     "Steamodded-Steamodded-1.1814.0"
+    ],
+    "download_url": "https://thunderstore.io/package/download/spectralpack/Cryptid/0.5.17/",
+    "downloads": 4904,
+    "date_created": "2026-08-24T16:19:00.546242+00:00",
+    "website_url": "https://github.com/SpectralPack/Cryptid",
+    "is_active": true,
+    "uuid4": "dd0c29c9-22cd-47a4-97b8-4ac6476677f9",
+    "file_size": 21222175
+   }
+  ]
+ },
+ {
+  "name": "Lust",
+  "full_name": "crimsonseraphim-Lust",
+  "owner": "crimsonseraphim",
+  "package_url": "https://thunderstore.io/c/balatro/p/crimsonseraphim/Lust/",
+  "donation_link": "https://ko-fi.com/crimsonseraphim",
+  "date_created": "2026-08-24T14:53:34.207454+00:00",
+  "date_updated": "2026-08-24T14:53:46.362367+00:00",
+  "uuid4": "e2b33b4b-1b07-4a97-b10a-5da499310c28",
+  "rating_score": 1,
+  "is_pinned": false,
+  "is_deprecated": false,
+  "has_nsfw_content": true,
+  "categories": [
+   "Mods",
+   "Tools",
+   "Misc"
+  ],
+  "versions": [
+   {
+    "name": "Lust",
+    "full_name": "crimsonseraphim-Lust-1.0.2",
+    "description": "Adds Buttplug.io support to Balatro",
+    "icon": "https://ccdn.thunderstore.io/live/repository/icons/crimsonseraphim-Lust-1.0.2.png",
+    "version_number": "1.0.2",
+    "dependencies": [],
+    "download_url": "https://thunderstore.io/package/download/crimsonseraphim/Lust/1.0.2/",
+    "downloads": 68,
+    "date_created": "2026-08-24T14:53:45.530568+00:00",
+    "website_url": "https://github.com/lord-ruby/Lust",
+    "is_active": true,
+    "uuid4": "0bb00cb6-e71e-415f-a1b3-1b49847cc656",
+    "file_size": 4479498
+   }
+  ]
+ },
+ {
+  "name": "RankAndFile",
+  "full_name": "vibez-RankAndFile",
+  "owner": "vibez",
+  "package_url": "https://thunderstore.io/c/balatro/p/vibez/RankAndFile/",
+  "donation_link": "https://ko-fi.com/ygorborges",
+  "date_created": "2026-09-04T18:55:29.163099+00:00",
+  "date_updated": "2026-09-05T20:01:11.707645+00:00",
+  "uuid4": "6a1a9541-3dc8-480c-b578-ae57e7508bfe",
+  "rating_score": 0,
+  "is_pinned": false,
+  "is_deprecated": false,
+  "has_nsfw_content": false,
+  "categories": [
+   "Mods",
+   "AI Generated"
+  ],
+  "versions": [
+   {
+    "name": "RankAndFile",
+    "full_name": "vibez-RankAndFile-1.1.1",
+    "description": "Shows poker-hand base totals in Run Info and the selected-hand preview, with optional score sorting.",
+    "icon": "https://ccdn.thunderstore.io/live/repository/icons/vibez-RankAndFile-1.1.1.png",
+    "version_number": "1.1.1",
+    "dependencies": [
+     "Steamodded-Steamodded-26.829.0"
+    ],
+    "download_url": "https://thunderstore.io/package/download/vibez/RankAndFile/1.1.1/",
+    "downloads": 256,
+    "date_created": "2026-09-05T20:01:11.107458+00:00",
+    "website_url": "https://github.com/ygorborges/balatro-mods/tree/main/RankAndFile",
+    "is_active": true,
+    "uuid4": "22786837-9428-4336-bd4a-07665850f299",
+    "file_size": 90495
+   },
+   {
+    "name": "RankAndFile",
+    "full_name": "vibez-RankAndFile-1.1.0",
+    "description": "Shows poker-hand base totals in Run Info and the selected-hand preview, with optional score sorting.",
+    "icon": "https://ccdn.thunderstore.io/live/repository/icons/vibez-RankAndFile-1.1.0.png",
+    "version_number": "1.1.0",
+    "dependencies": [
+     "Steamodded-Steamodded-26.829.0"
+    ],
+    "download_url": "https://thunderstore.io/package/download/vibez/RankAndFile/1.1.0/",
+    "downloads": 53,
+    "date_created": "2026-09-05T01:04:12.340438+00:00",
+    "website_url": "https://github.com/Steamodded/smods",
+    "is_active": true,
+    "uuid4": "2c3e79bd-8bd1-4aa3-90a2-44e6984ca78e",
+    "file_size": 90420
+   },
+   {
+    "name": "RankAndFile",
+    "full_name": "vibez-RankAndFile-1.0.0",
+    "description": "Shows poker-hand base totals and can rank them by Chips x Mult.",
+    "icon": "https://ccdn.thunderstore.io/live/repository/icons/vibez-RankAndFile-1.0.0.png",
+    "version_number": "1.0.0",
+    "dependencies": [
+     "Steamodded-Steamodded-26.829.0"
+    ],
+    "download_url": "https://thunderstore.io/package/download/vibez/RankAndFile/1.0.0/",
+    "downloads": 46,
+    "date_created": "2026-09-04T18:55:35.613134+00:00",
+    "website_url": "https://github.com/Steamodded/smods",
+    "is_active": true,
+    "uuid4": "b71e9790-414c-4bbf-b257-04b130c49254",
+    "file_size": 90407
+   }
+  ]
+ },
+ {
+  "name": "balatro_horse_mod",
+  "full_name": "SuperDZ555-balatro_horse_mod",
+  "owner": "SuperDZ555",
+  "package_url": "https://thunderstore.io/c/balatro/p/SuperDZ555/balatro_horse_mod/",
+  "donation_link": null,
+  "date_created": "2026-10-07T00:05:35.841097+00:00",
+  "date_updated": "2026-10-07T00:33:07.809516+00:00",
+  "uuid4": "b7035dc6-56a3-495f-a7a0-3e15f35a1043",
+  "rating_score": 0,
+  "is_pinned": false,
+  "is_deprecated": true,
+  "has_nsfw_content": false,
+  "categories": [
+   "Content Mods"
+  ],
+  "versions": [
+   {
+    "name": "balatro_horse_mod",
+    "full_name": "SuperDZ555-balatro_horse_mod-1.1.2",
+    "description": "DOWNLOAD THRU GITHUB!!!",
+    "icon": "https://ccdn.thunderstore.io/live/repository/icons/SuperDZ555-balatro_horse_mod-1.1.2.png",
+    "version_number": "1.1.2",
+    "dependencies": [
+     "Steamodded-Steamodded-26.1002.0",
+     "Thunderstore-lovely-0.10.0"
+    ],
+    "download_url": "https://thunderstore.io/package/download/SuperDZ555/balatro_horse_mod/1.1.2/",
+    "downloads": 3,
+    "date_created": "2026-10-07T00:33:07.413237+00:00",
+    "website_url": "https://github.com/SuperDZ555/balatro-horse",
+    "is_active": true,
+    "uuid4": "980b9fbf-189a-4039-86fe-7caaf65ee415",
+    "file_size": 15564
+   },
+   {
+    "name": "balatro_horse_mod",
+    "full_name": "SuperDZ555-balatro_horse_mod-1.1.1",
+    "description": "adds horses (horse sprites by @flechadafoxy)",
+    "icon": "https://ccdn.thunderstore.io/live/repository/icons/SuperDZ555-balatro_horse_mod-1.1.1.png",
+    "version_number": "1.1.1",
+    "dependencies": [
+     "Steamodded-Steamodded-26.1002.0",
+     "Thunderstore-lovely-0.10.0"
+    ],
+    "download_url": "https://thunderstore.io/package/download/SuperDZ555/balatro_horse_mod/1.1.1/",
+    "downloads": 3,
+    "date_created": "2026-10-07T00:06:06.319738+00:00",
+    "website_url": "https://github.com/SuperDZ555/balatro-horse",
+    "is_active": true,
+    "uuid4": "5a1bf290-7d23-4133-af3a-b39f3cde3f65",
+    "file_size": 390538
+   }
+  ]
+ }
+]
