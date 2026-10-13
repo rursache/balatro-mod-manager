@@ -369,7 +369,6 @@ dependencies = [
  "tauri-plugin-prevent-default",
  "tauri-plugin-single-instance",
  "tauri-plugin-window-state",
- "tauri-utils",
  "tempfile",
  "test-case",
  "tokio",
