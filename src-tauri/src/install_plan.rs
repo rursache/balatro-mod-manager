@@ -218,7 +218,9 @@ fn catalog_entry_of<'a>(ctx: &PlanContext<'a>, full_name: &str) -> Option<&'a Ar
 }
 
 /// The installed row of a catalog entry: the Thunderstore package by source_id, else the
-/// index row with the entry title when the entry has an index side
+/// index row with the entry title. A Thunderstore only entry claims an index row only
+/// when no index entry lists that title, the frontend shows such a row as that package
+/// (a mod the index dropped) so installing it moves the row instead of adding a copy
 fn tracked_row<'a>(ctx: &PlanContext<'a>, item: &ArchiveModItem) -> Option<&'a InstalledMod> {
     if let Some(ts) = &item.thunderstore
         && let Some(row) = ctx.installed.iter().find(|r| {
@@ -229,12 +231,40 @@ fn tracked_row<'a>(ctx: &PlanContext<'a>, item: &ArchiveModItem) -> Option<&'a I
     {
         return Some(row);
     }
-    if item.source == CatalogSource::Thunderstore {
+    if item.source != CatalogSource::Thunderstore {
+        return ctx
+            .installed
+            .iter()
+            .find(|r| r.source == SOURCE_INDEX && r.name.eq_ignore_ascii_case(&item.meta.title));
+    }
+    // The Multiplayer section adopts manual copies of its packages itself
+    if item.thunderstore.as_ref().is_none_or(|t| {
+        t.namespace
+            .eq_ignore_ascii_case(thunderstore::MULTIPLAYER_NAMESPACE)
+    }) {
         return None;
     }
-    ctx.installed
-        .iter()
-        .find(|r| r.source == SOURCE_INDEX && r.name.eq_ignore_ascii_case(&item.meta.title))
+    let title = compact_title(&item.meta.title);
+    if title.is_empty()
+        || ctx.catalog.iter().any(|i| {
+            i.source != CatalogSource::Thunderstore && compact_title(&i.meta.title) == title
+        })
+    {
+        return None;
+    }
+    let index_rows = || ctx.installed.iter().filter(|r| r.source == SOURCE_INDEX);
+    index_rows()
+        .find(|r| r.name.eq_ignore_ascii_case(&item.meta.title))
+        .or_else(|| index_rows().find(|r| compact_title(&r.name) == title))
+}
+
+/// Title key the frontend matches installed rows with, lowercase ASCII letters and digits
+fn compact_title(title: &str) -> String {
+    title
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .map(|c| c.to_ascii_lowercase())
+        .collect()
 }
 
 fn tracked_package<'a>(ctx: &PlanContext<'a>, full_name: &str) -> Option<&'a InstalledMod> {
@@ -245,9 +275,7 @@ fn tracked_package<'a>(ctx: &PlanContext<'a>, full_name: &str) -> Option<&'a Ins
     }) {
         return Some(row);
     }
-    catalog_entry_of(ctx, full_name)
-        .filter(|item| item.source == CatalogSource::Merged)
-        .and_then(|item| tracked_row(ctx, item))
+    catalog_entry_of(ctx, full_name).and_then(|item| tracked_row(ctx, item))
 }
 
 /// Tracked mods keep their source, new installs prefer Thunderstore unless the package is
@@ -1277,6 +1305,39 @@ mod tests {
         assert_eq!(plan.steps.last().unwrap().tracked_name, None);
         // Its Pokermon dependency is the merged entry the user tracks from the index
         assert_eq!(plan.satisfied[0].tracked_name, "Pokermon");
+    }
+
+    #[test]
+    fn thunderstore_only_entry_takes_over_an_index_row_the_index_dropped() {
+        let packages = fixture_packages();
+        let catalog = catalog_items(&packages);
+        let mut dropped = row("Joker Display", SOURCE_INDEX, None, "1.0.0");
+        dropped.orphaned = true;
+        let installed = [dropped];
+
+        let plan = plan_install(
+            &ctx(&catalog, &packages, &installed),
+            "ts:nh6574-JokerDisplay",
+            None,
+            None,
+        )
+        .expect("plan");
+        let root = plan.steps.iter().find(|s| s.is_root).unwrap();
+        assert_eq!(root.source, InstallSource::Thunderstore);
+        assert_eq!(root.tracked_name.as_deref(), Some("Joker Display"));
+        assert_eq!(root.tracked_source.as_deref(), Some(SOURCE_INDEX));
+
+        // A row an index entry still lists belongs to that entry
+        let mut catalog = catalog;
+        catalog.push(index_item("Someone@JokerDisplay", "JokerDisplay", ""));
+        let plan = plan_install(
+            &ctx(&catalog, &packages, &installed),
+            "ts:nh6574-JokerDisplay",
+            None,
+            None,
+        )
+        .expect("plan");
+        assert!(plan.steps.iter().all(|s| s.tracked_name.is_none()));
     }
 
     #[test]
