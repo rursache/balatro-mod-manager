@@ -44,6 +44,10 @@
     toggleStore(thunderstoreEnabled);
     // The Thunderstore chip filters everything out once the source is off
     if (!$thunderstoreEnabled) sourceFilter.set("all");
+    // The backend skips Thunderstore requests while this is off
+    invoke("set_thunderstore_enabled", { enabled: $thunderstoreEnabled }).catch(
+      (e) => console.warn("set_thunderstore_enabled failed", e),
+    );
   }
 
   let isReindexing = $state(false);

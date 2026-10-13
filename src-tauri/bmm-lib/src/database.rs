@@ -1138,6 +1138,16 @@ impl Database {
         Ok(self.get_setting("compat_helper")?.as_deref() == Some("enabled"))
     }
 
+    /// Thunderstore catalog setting, on unless the user turned it off
+    pub fn set_thunderstore_enabled(&self, enabled: bool) -> Result<(), AppError> {
+        let value = if enabled { "enabled" } else { "disabled" };
+        self.set_setting("thunderstore", value)
+    }
+
+    pub fn is_thunderstore_enabled(&self) -> Result<bool, AppError> {
+        Ok(self.get_setting("thunderstore")?.as_deref() != Some("disabled"))
+    }
+
     /// Check if the 0.3.7 compat helper migration has been applied.
     pub fn is_compat_helper_037_migrated(&self) -> Result<bool, AppError> {
         Ok(self.get_setting("compat_helper_037_migrated")?.is_some())
@@ -1763,6 +1773,17 @@ mod tests {
         );
         db.remove_setting("multiplayer_copied_dlls")?;
         assert_eq!(db.get_setting("multiplayer_copied_dlls")?, None);
+        Ok(())
+    }
+
+    #[test]
+    fn thunderstore_setting_defaults_to_enabled() -> Result<(), AppError> {
+        let db = create_memory_db()?;
+        assert!(db.is_thunderstore_enabled()?);
+        db.set_thunderstore_enabled(false)?;
+        assert!(!db.is_thunderstore_enabled()?);
+        db.set_thunderstore_enabled(true)?;
+        assert!(db.is_thunderstore_enabled()?);
         Ok(())
     }
 }

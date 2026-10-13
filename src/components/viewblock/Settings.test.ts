@@ -213,6 +213,9 @@ describe("Settings view", () => {
     expect(mockStorage["catalog.hideAiGenerated"]).toBe("true");
     expect(mockStorage["catalog.showDeprecated"]).toBe("true");
     expect(mockStorage["catalog.thunderstoreEnabled"]).toBe("false");
+    expect(invokeMock).toHaveBeenCalledWith("set_thunderstore_enabled", {
+      enabled: false,
+    });
 
     for (const store of [
       showNsfwMods,

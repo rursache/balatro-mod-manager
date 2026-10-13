@@ -1,6 +1,7 @@
 use crate::assets::{THUMB_CACHE_TTL_SECS, ensure_assets_dirs_async, safe_slug};
 use crate::catalog::{self, CatalogStatus};
 use crate::models::{ArchiveModItem, CatalogSource, ThunderstoreInfo};
+use crate::state::AppState;
 use crate::thunderstore;
 use bmm_lib::errors::AppError;
 use serde::{Deserialize, Serialize};
@@ -118,9 +119,23 @@ pub async fn get_mod_details(title: String, dir_name: String) -> Result<ModDetai
     })
 }
 
-/// Merged GitHub index and Thunderstore catalog
+/// Merged GitHub index and Thunderstore catalog. `thunderstore` carries the UI setting so
+/// the first sync after launch already honors it
 #[tauri::command]
-pub async fn fetch_repo_mods(force: Option<bool>) -> Result<Vec<ArchiveModItem>, String> {
+pub async fn fetch_repo_mods(
+    state: tauri::State<'_, AppState>,
+    force: Option<bool>,
+    thunderstore: Option<bool>,
+) -> Result<Vec<ArchiveModItem>, String> {
+    if let Some(enabled) = thunderstore
+        && enabled != thunderstore::is_enabled()
+    {
+        thunderstore::set_enabled(enabled);
+        let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
+        if let Err(e) = db.set_thunderstore_enabled(enabled) {
+            log::warn!("Failed to persist the Thunderstore setting: {e}");
+        }
+    }
     catalog::sync_all(force.unwrap_or(false)).await
 }
 

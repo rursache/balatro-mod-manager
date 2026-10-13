@@ -8,7 +8,7 @@ use std::cmp::Ordering;
 use std::future::Future;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering as AtomicOrdering};
 use std::time::Duration;
 
 use once_cell::sync::Lazy;
@@ -81,6 +81,7 @@ static LAST_ERROR: Lazy<std::sync::Mutex<Option<String>>> =
 static README_PERMITS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
 static README_COOLDOWN: std::sync::Mutex<Option<tokio::time::Instant>> =
     std::sync::Mutex::new(None);
+static ENABLED: AtomicBool = AtomicBool::new(true);
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -705,6 +706,9 @@ pub async fn readme_cached(
     if let Some(text) = read_cache().await {
         return Ok(text);
     }
+    if !is_enabled() {
+        return Err("Thunderstore is turned off".to_string());
+    }
     let _permit = readme_permit().await?;
     if let Some(text) = read_cache().await {
         return Ok(text);
@@ -879,6 +883,16 @@ pub fn find_package<'a>(packages: &'a [TsPackage], full_name: &str) -> Option<&'
                 .iter()
                 .find(|p| p.full_name.eq_ignore_ascii_case(full_name))
         })
+}
+
+/// The Thunderstore setting, off keeps the catalog on cached packages and stops README
+/// requests
+pub fn is_enabled() -> bool {
+    ENABLED.load(AtomicOrdering::Relaxed)
+}
+
+pub fn set_enabled(enabled: bool) {
+    ENABLED.store(enabled, AtomicOrdering::Relaxed);
 }
 
 /// Forgets the in-memory packages so the next request reloads them from disk or the network

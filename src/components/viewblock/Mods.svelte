@@ -1411,7 +1411,9 @@
   async function loadCatalogCore(options: CatalogLoadOptions): Promise<void> {
     const { showMessages, isForeground } = options;
 
-    const items = await invoke<ArchiveModItem[]>("fetch_repo_mods");
+    const items = await invoke<ArchiveModItem[]>("fetch_repo_mods", {
+      thunderstore: get(thunderstoreEnabled),
+    });
     clearCatalogRetry();
 
     if (isForeground && items.length === 0) {
@@ -2335,7 +2337,9 @@
       let repoModsLoaded = false;
       const ensureRepoMods = async () => {
         if (repoModsLoaded) return;
-        const items = await invoke<ArchiveModItem[]>("fetch_repo_mods");
+        const items = await invoke<ArchiveModItem[]>("fetch_repo_mods", {
+          thunderstore: get(thunderstoreEnabled),
+        });
         const mapped = mapArchiveItems(items);
         repoModsByNormalized.clear();
         repoModsById.clear();

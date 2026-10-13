@@ -53,6 +53,7 @@ pub fn run() {
         .plugin(tauri_plugin_prevent_default::init())
         .setup(|app| {
             let db = map_error(Database::new())?;
+            crate::thunderstore::set_enabled(db.is_thunderstore_enabled().unwrap_or(true));
 
             // Initialize Discord RPC manager (lightweight, no network calls)
             let discord_rpc = DiscordRpcManager::new();
@@ -481,6 +482,8 @@ pub fn run() {
             commands::settings::set_background_state,
             commands::settings::get_compat_helper_status,
             commands::settings::set_compat_helper_status,
+            commands::settings::get_thunderstore_enabled,
+            commands::settings::set_thunderstore_enabled,
             commands::settings::get_discord_rpc_status,
             commands::settings::set_discord_rpc_status,
             commands::settings::set_linux_prefix,

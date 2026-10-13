@@ -377,10 +377,24 @@ pub async fn multiplayer_packages() -> Result<Vec<TsPackage>, String> {
 // Sync and lookups
 // ---------------------------------------------------------------------------
 
+/// Thunderstore packages for the catalog, only what is already cached while the setting is
+/// off so installed Thunderstore mods still resolve without any request
+async fn catalog_packages(sync: bool, force: bool) -> Result<Vec<TsPackage>, String> {
+    if !thunderstore::is_enabled() {
+        return Ok(thunderstore::cached_packages_offline().await);
+    }
+    if sync {
+        thunderstore::sync(force).await
+    } else {
+        thunderstore::cached_packages().await
+    }
+}
+
 /// Syncs the GitHub index and Thunderstore concurrently and returns the merged catalog,
 /// one failing source still yields the other
 pub async fn sync_all(force: bool) -> Result<Vec<ArchiveModItem>, String> {
-    let (index, packages) = tokio::join!(mod_index::sync_index(force), thunderstore::sync(force));
+    let (index, packages) =
+        tokio::join!(mod_index::sync_index(force), catalog_packages(true, force));
     store(index, packages).await
 }
 
@@ -423,7 +437,7 @@ pub async fn catalog_items() -> Result<Vec<ArchiveModItem>, String> {
         return Ok(state.items.clone());
     }
     let (index, packages) =
-        tokio::join!(mod_index::catalog_items(), thunderstore::cached_packages());
+        tokio::join!(mod_index::catalog_items(), catalog_packages(false, false));
     store(index, packages).await
 }
 

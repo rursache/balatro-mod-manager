@@ -73,6 +73,24 @@ pub async fn set_compat_helper_status(
 }
 
 #[tauri::command]
+pub async fn get_thunderstore_enabled(state: tauri::State<'_, AppState>) -> Result<bool, String> {
+    let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
+    map_error(db.is_thunderstore_enabled())
+}
+
+/// Persists the Thunderstore setting, off stops listing syncs and README requests
+#[tauri::command]
+pub async fn set_thunderstore_enabled(
+    state: tauri::State<'_, AppState>,
+    enabled: bool,
+) -> Result<(), String> {
+    let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
+    map_error(db.set_thunderstore_enabled(enabled))?;
+    crate::thunderstore::set_enabled(enabled);
+    Ok(())
+}
+
+#[tauri::command]
 pub async fn set_linux_prefix(
     state: tauri::State<'_, AppState>,
     value: String,
