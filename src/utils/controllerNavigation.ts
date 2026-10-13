@@ -248,13 +248,14 @@ export function startControllerNavigation(
   const repeatIntervalMs = options.repeatIntervalMs ?? 150;
   const axisThreshold = options.axisThreshold ?? 0.55;
 
+  const readGamepads = () =>
+    Array.from(navigator.getGamepads()).filter(Boolean) as Gamepad[];
+
   const tick = (now: number) => {
     if (stopped || !running) return;
 
     const root = resolveRoot(options.root);
-    const gamepads = Array.from(navigator.getGamepads()).filter(
-      Boolean,
-    ) as Gamepad[];
+    const gamepads = readGamepads();
     const pressedButtons = getPressedGamepadButtons(gamepads);
 
     handleControllerButtons(previousButtons, pressedButtons, {
@@ -283,6 +284,8 @@ export function startControllerNavigation(
   const startLoop = () => {
     if (running || stopped) return;
     running = true;
+    // The press that wakes a pad is still held on the first tick, so it must not count
+    previousButtons = getPressedGamepadButtons(readGamepads());
     frame = window.requestAnimationFrame(tick);
   };
 
@@ -296,6 +299,11 @@ export function startControllerNavigation(
 
   const onConnected = (event: GamepadEvent) => {
     connected.add(event.gamepad.index);
+    if (running) {
+      for (const button of getPressedGamepadButtons([event.gamepad])) {
+        previousButtons.add(button);
+      }
+    }
     startLoop();
   };
 

@@ -108,10 +108,24 @@ describe("controllerNavigation", () => {
     let rafMock: ReturnType<typeof vi.fn>;
     let cancelRafMock: ReturnType<typeof vi.fn>;
 
+    function pad(index: number, pressed: number[] = []): Gamepad {
+      const buttons = Array.from({ length: 16 }, (_, i) => ({
+        pressed: pressed.includes(i),
+      }));
+      return { index, buttons, axes: [0, 0] } as unknown as Gamepad;
+    }
+
     function gamepadEvent(type: string, index: number) {
       const event = new Event(type);
-      Object.defineProperty(event, "gamepad", { value: { index } });
+      Object.defineProperty(event, "gamepad", {
+        value: gamepads[index] ?? pad(index),
+      });
       window.dispatchEvent(event);
+    }
+
+    function runFrame() {
+      const tick = rafMock.mock.calls.at(-1)?.[0] as FrameRequestCallback;
+      tick(performance.now());
     }
 
     beforeEach(() => {
@@ -135,7 +149,7 @@ describe("controllerNavigation", () => {
       const stop = startControllerNavigation({ onCancel: vi.fn() });
       expect(rafMock).not.toHaveBeenCalled();
 
-      gamepads[0] = { index: 0 } as Gamepad;
+      gamepads[0] = pad(0);
       gamepadEvent("gamepadconnected", 0);
       expect(rafMock).toHaveBeenCalledTimes(1);
 
@@ -150,9 +164,26 @@ describe("controllerNavigation", () => {
     });
 
     it("starts right away when a gamepad is already connected", () => {
-      gamepads[1] = { index: 1 } as Gamepad;
+      gamepads[1] = pad(1);
       const stop = startControllerNavigation({ onCancel: vi.fn() });
       expect(rafMock).toHaveBeenCalledTimes(1);
+      stop();
+    });
+
+    it("ignores the button press that woke the gamepad", () => {
+      const onCancel = vi.fn();
+      const stop = startControllerNavigation({ onCancel });
+
+      gamepads[0] = pad(0, [1]);
+      gamepadEvent("gamepadconnected", 0);
+      runFrame();
+      expect(onCancel).not.toHaveBeenCalled();
+
+      gamepads[0] = pad(0);
+      runFrame();
+      gamepads[0] = pad(0, [1]);
+      runFrame();
+      expect(onCancel).toHaveBeenCalledTimes(1);
       stop();
     });
   });
