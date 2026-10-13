@@ -381,7 +381,7 @@
     </div>
   </div>
 
-  {#if currentSection === "mods" && !$currentModView && $currentCategory !== "Search" && $currentCategory !== "Collections" && $currentCategory !== "Installed Mods" && $paginationWindow.totalPages > 1}
+  {#if currentSection === "mods" && !$currentModView && $currentCategory !== "Search" && $currentCategory !== "Collections" && $currentCategory !== "Installed Mods" && $currentCategory !== "Multiplayer" && $paginationWindow.totalPages > 1}
     <div
       class="pagination-footer"
       in:fade={{ duration: 150 }}
