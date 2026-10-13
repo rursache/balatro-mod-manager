@@ -1771,8 +1771,7 @@ pub fn strip_quarantine_from_native_libs(dir: &Path) -> Vec<PathBuf> {
             };
             if file_type.is_dir() {
                 stack.push(path);
-            } else if file_type.is_file() && is_native_library(&path) && remove_quarantine(&path)
-            {
+            } else if file_type.is_file() && is_native_library(&path) && remove_quarantine(&path) {
                 cleared.push(path);
             }
         }
@@ -1796,9 +1795,8 @@ fn remove_quarantine(path: &Path) -> bool {
         return false;
     };
     // SAFETY: both pointers are valid NUL terminated strings for the duration of the call
-    let removed = unsafe {
-        libc::removexattr(c_path.as_ptr(), c_name.as_ptr(), libc::XATTR_NOFOLLOW) == 0
-    };
+    let removed =
+        unsafe { libc::removexattr(c_path.as_ptr(), c_name.as_ptr(), libc::XATTR_NOFOLLOW) == 0 };
     if removed {
         log::info!("Removed quarantine attribute from {}", path.display());
     }
@@ -2735,7 +2733,9 @@ mod tests {
     #[test]
     fn thunderstore_download_url_must_be_official() {
         let ok = "https://thunderstore.io/package/download/BalatroMultiplayer/Multiplayer/0.5.7/";
-        assert!(validate_thunderstore_download_url(ok, "BalatroMultiplayer", "Multiplayer").is_ok());
+        assert!(
+            validate_thunderstore_download_url(ok, "BalatroMultiplayer", "Multiplayer").is_ok()
+        );
         for bad in [
             "http://thunderstore.io/package/download/BalatroMultiplayer/Multiplayer/0.5.7/",
             "https://github.com/Balatro-Multiplayer/BalatroMultiplayer/releases/download/v0.5.7/BalatroMultiplayer.zip",

@@ -481,8 +481,17 @@ impl Database {
             Err(_) => return Ok(()), // If query fails, just continue
         };
 
-        for (name, path, dependencies, current_version, orphaned, source, source_id, installed_at) in
-            stmt.query_map([], |row| {
+        for (
+            name,
+            path,
+            dependencies,
+            current_version,
+            orphaned,
+            source,
+            source_id,
+            installed_at,
+        ) in stmt
+            .query_map([], |row| {
                 Ok((
                     row.get::<_, String>(0)?,
                     row.get::<_, String>(1)?,

@@ -1129,7 +1129,12 @@ fn parse_thunderstore_manifest(
         description: manifest
             .description
             .unwrap_or_else(|| format!("Mod found in {}", mod_path.display())),
-        prefix: manifest.name.chars().take(4).collect::<String>().to_lowercase(),
+        prefix: manifest
+            .name
+            .chars()
+            .take(4)
+            .collect::<String>()
+            .to_lowercase(),
         version: manifest.version_number,
         path: mod_path.to_string_lossy().to_string(),
         dependencies: manifest.dependencies.unwrap_or_default(),
@@ -2874,7 +2879,9 @@ mod tests {
         .unwrap();
         std::fs::write(mod_dir.join("main.lua"), "-- mp").unwrap();
 
-        let detected = detect_mod_in_directory(&mod_dir).unwrap().expect("detected");
+        let detected = detect_mod_in_directory(&mod_dir)
+            .unwrap()
+            .expect("detected");
         // The richer mod json wins but keeps the Thunderstore identity
         assert_eq!(detected.id, "Multiplayer");
         let ts = detected.thunderstore.expect("thunderstore identity");
@@ -2899,7 +2906,9 @@ mod tests {
         )
         .unwrap();
 
-        let detected = detect_mod_in_directory(&mod_dir).unwrap().expect("detected");
+        let detected = detect_mod_in_directory(&mod_dir)
+            .unwrap()
+            .expect("detected");
         assert_eq!(detected.name, "WheelOfFortuneTracker");
         assert_eq!(detected.author, vec!["Unknown".to_string()]);
         let ts = detected.thunderstore.expect("thunderstore identity");
