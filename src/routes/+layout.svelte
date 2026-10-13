@@ -23,6 +23,7 @@
   import { APP_LATEST_RELEASE_API, APP_TAGS_API } from "../constants/links";
   import { invoke } from "@tauri-apps/api/core";
   import { startControllerNavigation } from "../utils/controllerNavigation";
+  import { getTopModal } from "../utils/modalStack";
 
   const { data, children } = $props();
 
@@ -220,6 +221,7 @@
     setupAppWindow();
     checkForUpdate();
     stopControllerNavigation = startControllerNavigation({
+      root: () => getTopModal() ?? document,
       onCancel: handleControllerCancel,
     });
 

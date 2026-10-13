@@ -4,6 +4,7 @@ import {
   findNearestFocusTarget,
   getFocusableElements,
   handleControllerButtons,
+  moveControllerFocus,
   startControllerNavigation,
 } from "./controllerNavigation";
 
@@ -84,6 +85,26 @@ describe("controllerNavigation", () => {
 
     expect(activateFocusedElement()).toBe(true);
     expect(onClick).toHaveBeenCalledOnce();
+  });
+
+  it("keeps spatial navigation inside the given modal root", () => {
+    const behind = document.createElement("button");
+    const dialog = document.createElement("div");
+    const confirm = document.createElement("button");
+    const cancel = document.createElement("button");
+    dialog.append(confirm, cancel);
+    document.body.append(behind, dialog);
+    rect(behind, 0, 0);
+    rect(confirm, 0, 100);
+    rect(cancel, 100, 100);
+
+    behind.dataset.controllerFocus = "true";
+    expect(moveControllerFocus("down", dialog)).toBe(confirm);
+    expect(behind.dataset.controllerFocus).toBeUndefined();
+    expect(moveControllerFocus("up", dialog)).toBeNull();
+    expect(moveControllerFocus("right", dialog)).toBe(cancel);
+    expect(moveControllerFocus("right", dialog)).toBeNull();
+    expect(document.activeElement).toBe(cancel);
   });
 
   it("calls cancel for B and Back button presses", () => {

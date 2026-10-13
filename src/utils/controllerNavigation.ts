@@ -132,10 +132,10 @@ export function findNearestFocusTarget(
 
 export function focusControllerElement(
   element: HTMLElement | null,
-  root: ParentNode = document,
 ): HTMLElement | null {
   if (!element || !isFocusable(element)) return null;
-  clearControllerFocus(root);
+  // Clear globally so nothing behind a modal keeps the highlight
+  clearControllerFocus(element.ownerDocument);
   element.setAttribute(CONTROLLER_FOCUS_ATTR, "true");
   element.focus({ preventScroll: true });
   element.scrollIntoView?.({ block: "nearest", inline: "nearest" });
@@ -156,7 +156,6 @@ export function moveControllerFocus(
   const current = getControllerFocusedElement(root) ?? active;
   return focusControllerElement(
     findNearestFocusTarget(current, direction, candidates),
-    root,
   );
 }
 
