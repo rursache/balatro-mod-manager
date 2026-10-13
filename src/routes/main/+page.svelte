@@ -42,8 +42,75 @@
   import { fade } from "svelte/transition";
   import { isLinuxPlatform } from "$lib/platform";
   import { backupsStore } from "../../stores/backups";
+  import { clearSelection } from "../../stores/modStore";
+  import {
+    DEFAULT_CATALOG_CATEGORY,
+    MAIN_TABS,
+    categoryForTab,
+    isCatalogCategory,
+    isModsTab,
+    resolveStartupTab,
+    showsPagination,
+    tabForCategory,
+    type MainTab,
+    type ModsTab,
+  } from "../../utils/mainTabs";
 
-  let currentSection = $state("mods");
+  type Section = "mods" | "backups" | "settings" | "about";
+
+  let currentSection = $state<Section>("mods");
+  // Tabs stay unselected and the Mods view hidden until the installed list decides the first tab
+  let startupResolved = $state(false);
+  let lastCatalogCategory = $state(DEFAULT_CATALOG_CATEGORY);
+  currentCategory.set(DEFAULT_CATALOG_CATEGORY);
+
+  let activeTab = $derived<MainTab | null>(
+    currentSection !== "mods"
+      ? currentSection
+      : startupResolved
+        ? tabForCategory($currentCategory)
+        : null,
+  );
+
+  $effect(() => {
+    if (isCatalogCategory($currentCategory)) {
+      lastCatalogCategory = $currentCategory;
+    }
+  });
+
+  function openModsTab(tab: ModsTab) {
+    const sameTab = tabForCategory(get(currentCategory)) === tab;
+    // Coming back from Settings and the like keeps an open detail page, any other tab click closes it
+    if (!(currentSection !== "mods" && sameTab)) {
+      currentModView.set(null);
+    }
+    currentSection = "mods";
+    if (!sameTab) {
+      if (tab !== "installed") clearSelection();
+      currentCategory.set(categoryForTab(tab, lastCatalogCategory));
+    }
+  }
+
+  function selectTab(tab: MainTab) {
+    startupResolved = true;
+    if (isModsTab(tab)) {
+      openModsTab(tab);
+      return;
+    }
+    if (tab === "backups") backupsStore.load();
+    currentSection = tab;
+  }
+
+  async function chooseStartupTab() {
+    const tab = await resolveStartupTab({
+      tracked: () => fetchCachedMods(),
+      local: () => invoke<unknown[]>("get_detected_local_mods"),
+    });
+    // A tab clicked while the lists were loading wins
+    if (startupResolved) return;
+    currentCategory.set(categoryForTab(tab, lastCatalogCategory));
+    startupResolved = true;
+  }
   let isLinux = $state(false);
   let hasMounted = $state(false);
   let appVersion = $state("");
@@ -235,6 +302,7 @@
   }
 
   onMount(async () => {
+    void chooseStartupTab();
     isLinux = await isLinuxPlatform();
     hasMounted = true;
     handleRefresh();
@@ -321,40 +389,29 @@
 {/if}
 
 <div class="main-page">
-  <header>
-    <div class="header-content">
-      <h1>Balatro Mod Manager</h1>
+  <header class="app-header" data-tauri-drag-region>
+    <div class="brand" data-tauri-drag-region>
+      <h1 data-tauri-drag-region>Balatro Mod Manager</h1>
+      {#if appVersion}
+        <span class="app-version" data-testid="header-version"
+          >v{appVersion}</span
+        >
+      {/if}
+    </div>
+    <nav class="tabs" aria-label="Sections">
+      {#each MAIN_TABS as tab (tab.id)}
+        <button
+          class:active={activeTab === tab.id}
+          aria-current={activeTab === tab.id ? "page" : undefined}
+          onclick={() => selectTab(tab.id)}
+        >
+          {tab.label}
+        </button>
+      {/each}
+    </nav>
+    <div class="launch-slot">
       <LaunchButton />
     </div>
-    <nav>
-      <button
-        class:active={currentSection === "mods"}
-        onclick={() => (currentSection = "mods")}
-      >
-        Mods
-      </button>
-      <button
-        class:active={currentSection === "backups"}
-        onclick={() => {
-          currentSection = "backups";
-          backupsStore.load();
-        }}
-      >
-        Backups
-      </button>
-      <button
-        class:active={currentSection === "settings"}
-        onclick={() => (currentSection = "settings")}
-      >
-        Settings
-      </button>
-      <button
-        class:active={currentSection === "about"}
-        onclick={() => (currentSection = "about")}
-      >
-        About
-      </button>
-    </nav>
   </header>
 
   <div
@@ -364,7 +421,10 @@
     style="--card-scale: {$cardScale}"
   >
     <!-- All sections stay mounted for smooth transitions -->
-    <div class="section-wrapper" class:active={currentSection === "mods"}>
+    <div
+      class="section-wrapper"
+      class:active={currentSection === "mods" && startupResolved}
+    >
       <Mods mod={null} {handleDependencyCheck} />
     </div>
 
@@ -381,33 +441,35 @@
     </div>
   </div>
 
-  {#if currentSection === "mods" && !$currentModView && $currentCategory !== "Search" && $currentCategory !== "Collections" && $currentCategory !== "Installed Mods" && $currentCategory !== "Multiplayer" && $paginationWindow.totalPages > 1}
-    <div
-      class="pagination-footer"
-      in:fade={{ duration: 150 }}
-      out:fade={{ duration: 120 }}
-    >
-      <div class="pagination-controls">
-        <button onclick={previousPage} disabled={$currentPage === 1}>
-          Previous
-        </button>
-        {#each Array(Math.min($paginationWindow.maxVisiblePages, $paginationWindow.totalPages)) as _, i (i)}
-          {#if $paginationWindow.startPage + i <= $paginationWindow.totalPages}
-            <button
-              class:active={$currentPage === $paginationWindow.startPage + i}
-              onclick={() => goToPage($paginationWindow.startPage + i)}
-            >
-              {$paginationWindow.startPage + i}
-            </button>
-          {/if}
-        {/each}
-        <button
-          onclick={nextPage}
-          disabled={$currentPage === $paginationWindow.totalPages}
+  {#if currentSection === "mods" && startupResolved && showsPagination($currentCategory)}
+    <div class="pagination-footer">
+      {#if !$currentModView && $paginationWindow.totalPages > 1}
+        <div
+          class="pagination-controls"
+          in:fade={{ duration: 150 }}
+          out:fade={{ duration: 120 }}
         >
-          Next
-        </button>
-      </div>
+          <button onclick={previousPage} disabled={$currentPage === 1}>
+            Previous
+          </button>
+          {#each Array(Math.min($paginationWindow.maxVisiblePages, $paginationWindow.totalPages)) as _, i (i)}
+            {#if $paginationWindow.startPage + i <= $paginationWindow.totalPages}
+              <button
+                class:active={$currentPage === $paginationWindow.startPage + i}
+                onclick={() => goToPage($paginationWindow.startPage + i)}
+              >
+                {$paginationWindow.startPage + i}
+              </button>
+            {/if}
+          {/each}
+          <button
+            onclick={nextPage}
+            disabled={$currentPage === $paginationWindow.totalPages}
+          >
+            Next
+          </button>
+        </div>
+      {/if}
     </div>
   {/if}
 
@@ -423,8 +485,6 @@
     {onUninstalled}
     {onError}
   />
-
-  {#if appVersion}<div class="version-text">v{appVersion}</div>{/if}
 </div>
 
 <LovelyMissingPopup />
@@ -441,19 +501,38 @@
     height: 100vh;
     display: flex;
     flex-direction: column;
-    padding: 2rem;
+    gap: 0.75rem;
+    padding: 0.75rem 1.5rem 1rem;
     box-sizing: border-box;
     background: transparent;
   }
-  header {
-    margin-bottom: -1rem;
+
+  .app-header {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      "brand launch"
+      "tabs launch";
+    align-items: center;
+    column-gap: 1rem;
+    row-gap: 0.6rem;
+  }
+
+  .brand {
+    grid-area: brand;
+    display: flex;
+    align-items: baseline;
+    gap: 0.6rem;
+    min-width: 0;
   }
 
   h1 {
+    margin: 0;
     color: var(--ui-text);
-    font-size: 3rem;
-    margin-bottom: 2rem;
+    font-size: 2.4rem;
+    line-height: 1;
     font-family: "M6X11", sans-serif;
+    white-space: nowrap;
     text-shadow:
       -2px -2px 0 #000,
       2px -2px 0 #000,
@@ -461,56 +540,65 @@
       2px 2px 0 #000;
   }
 
-  nav {
-    display: flex;
-    gap: 1rem;
-    margin-bottom: 2rem;
+  .app-version {
+    color: var(--ui-text);
+    opacity: 0.65;
+    font-family: "M6X11", sans-serif;
+    font-size: 1rem;
+    white-space: nowrap;
+    user-select: none;
   }
 
-  button {
+  .launch-slot {
+    grid-area: launch;
+    align-self: center;
+  }
+
+  .tabs {
+    grid-area: tabs;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    min-width: 0;
+  }
+
+  .tabs button {
     background: transparent;
     border: 2px solid var(--ui-text);
     color: var(--ui-text);
-    padding: 0.7rem 1.4rem;
+    padding: 0.5rem 1rem;
     border-radius: 8px;
     font-family: "M6X11", sans-serif;
-    font-size: 1.2rem;
+    font-size: 1.1rem;
+    white-space: nowrap;
     cursor: pointer;
     transition: all 0.2s ease;
   }
 
-  button:hover,
-  button.active {
+  .tabs button:hover,
+  .tabs button.active {
     background: var(--ui-mod-chip-active-bg);
     color: var(--ui-mod-chip-active-text);
   }
 
   .content {
+    position: relative;
     flex: 1;
+    min-height: 0;
     background: var(--ui-danger-overlay);
     border-radius: 5px;
     backdrop-filter: blur(10px);
-    margin-bottom: 2rem;
     outline: 2px solid var(--ui-danger-overlay-border-strong);
-    /* overflow-y: auto; Enable vertical scrolling */
     overflow: hidden;
-    max-height: calc(100vh - 12rem);
-    min-height: 0;
   }
 
   .content.modal-open {
     overflow: hidden !important;
-    /* scrollbar-gutter: stable; */
+    padding-right: 0;
   }
 
-  /* Add scrollbar width variable for consistency */
   :global(:root) {
     --scrollbar-width: 10px;
-  }
-
-  .content.modal-open {
-    /* padding-right: var(--scrollbar-width); */
-    padding-right: 0;
   }
 
   .section-wrapper {
@@ -548,44 +636,19 @@
     visibility: visible;
   }
 
-  .content {
-    position: relative;
-  }
-
-  .version-text {
-    position: fixed;
-    bottom: 1rem;
-    right: 1rem;
-    color: var(--ui-text);
-    font-family: "M6X11", sans-serif;
-    text-shadow:
-      -1px -1px 0 #000,
-      1px -1px 0 #000,
-      -1px 1px 0 #000,
-      1px 1px 0 #000;
-  }
-  .header-content {
-    position: relative;
-    margin-bottom: 2rem;
-  }
-
+  /* Reserved for every paged view so the grid does not jump when the controls fade */
   .pagination-footer {
-    position: fixed;
-    left: 50%;
-    bottom: 1.1rem;
-    transform: translateX(-50%);
+    height: 2.1rem;
+    margin-top: -0.25rem;
     display: flex;
     justify-content: center;
-    z-index: 1400;
+    align-items: center;
+    flex-shrink: 0;
   }
 
   .pagination-controls {
     display: flex;
     gap: 0.4rem;
-    padding: 0;
-    background: transparent;
-    border: none;
-    box-shadow: none;
   }
 
   .pagination-controls button {
@@ -614,9 +677,6 @@
     opacity: 0.5;
     cursor: not-allowed;
   }
-  header {
-    margin-bottom: -1rem;
-  }
 
   :global([data-platform="linux"]) .content {
     backdrop-filter: none;
@@ -624,13 +684,22 @@
   }
 
   @media (max-width: 1160px) {
-    button {
-      padding: 0.6rem 1.2rem;
-      border-radius: 8px;
-      font-family: "M6X11", sans-serif;
-      font-size: 0.9rem;
-      cursor: pointer;
-      transition: all 0.2s ease;
+    .main-page {
+      padding: 0.6rem 1.1rem 0.9rem;
+      gap: 0.6rem;
+    }
+
+    h1 {
+      font-size: 2.1rem;
+    }
+
+    .tabs {
+      gap: 0.4rem;
+    }
+
+    .tabs button {
+      padding: 0.45rem 0.75rem;
+      font-size: 0.95rem;
     }
   }
 </style>

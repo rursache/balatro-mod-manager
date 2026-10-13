@@ -273,9 +273,7 @@
 
 <style>
   .launch-container {
-    position: absolute;
-    top: 2.5rem;
-    right: 0rem;
+    position: relative;
   }
 
   .launch-wrapper {
@@ -415,9 +413,6 @@
         1.8px -1.8px 0 #000,
         -1.8px 1.8px 0 #000,
         1.8px 1.8px 0 #000;
-    }
-    .launch-container {
-      top: 2.4rem;
     }
     .dropdown-arrow {
       border-left-width: 4px;

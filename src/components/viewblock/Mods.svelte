@@ -1,20 +1,16 @@
 <script lang="ts">
   import {
-    Download,
     Flame,
-    //Clock,
     Star,
     Spade,
     Gamepad2,
     LayoutDashboard,
     FolderHeart,
     Search,
-    Layers,
     BookOpen,
     Folder,
     RefreshCw,
     X,
-    Users,
   } from "lucide-svelte";
   import ModView from "./ModView.svelte";
   import MultiplayerView from "./MultiplayerView.svelte";
@@ -137,6 +133,7 @@
     indexInstalledRows,
   } from "../../utils/installedPlaceholders";
   import { installedModsCache } from "../../stores/modCache";
+  import { CATALOG_CATEGORIES, tabForCategory } from "../../utils/mainTabs";
 
   /** Max parallel mod-update invocations to keep the Tauri IPC queue healthy. */
   const UPDATE_ALL_CONCURRENCY = 6;
@@ -1937,20 +1934,24 @@
 
   // No local clone or pull; we lazy-load from the repo instead.
 
-  const categories = [
-    { name: "Installed Mods", icon: Download },
-    { name: "Search", icon: Search },
-    { name: "Collections", icon: Layers },
-    { name: "Multiplayer", icon: Users },
-    { name: "All Mods", icon: LayoutDashboard },
-    { name: "Content", icon: FolderHeart },
-    { name: "Miscellaneous", icon: BookOpen },
-    { name: "Joker", icon: Flame },
-    { name: "Quality of Life", icon: Star },
-    { name: "Technical", icon: Spade },
-    { name: "Resource Packs", icon: FolderHeart },
-    { name: "API", icon: Gamepad2 },
-  ];
+  const categoryIcons: Record<
+    (typeof CATALOG_CATEGORIES)[number],
+    typeof Search
+  > = {
+    Search: Search,
+    "All Mods": LayoutDashboard,
+    Content: FolderHeart,
+    Miscellaneous: BookOpen,
+    Joker: Flame,
+    "Quality of Life": Star,
+    Technical: Spade,
+    "Resource Packs": FolderHeart,
+    API: Gamepad2,
+  };
+  const categories = CATALOG_CATEGORIES.map((name) => ({
+    name,
+    icon: categoryIcons[name],
+  }));
 
   const colorPairs = [
     { color1: "#4f6367", color2: "#425556" },
@@ -1975,7 +1976,10 @@
   }
 
   let showSearch = $derived($currentCategory === "Search");
-  $currentCategory = "All Mods";
+  // Installed Mods, Multiplayer and Collections are top tabs shown full width
+  let showCategorySidebar = $derived(
+    tabForCategory($currentCategory) === "catalog",
+  );
 
   let catalogFilterOptions = $derived({
     thunderstoreEnabled: $thunderstoreEnabled,
@@ -2101,6 +2105,19 @@
       clearSelection();
     }
   }
+
+  // Top tabs and ModView category tags switch categories from outside the sidebar
+  let lastSeenCategory: string | null = null;
+  $effect(() => {
+    const cat = $currentCategory;
+    if (lastSeenCategory !== null && cat !== lastSeenCategory) {
+      untrack(() => {
+        if (cat !== "Installed Mods") clearSelection();
+        modsScrollContainer?.scrollTo({ top: 0 });
+      });
+    }
+    lastSeenCategory = cat;
+  });
 
   function handleModsScroll() {
     isUserScrolling = true;
@@ -2961,20 +2978,22 @@
 
 <div class="container default-scrollbar">
   <div class="mods-container">
-    <div class="categories">
-      {#each categories as category}
-        {@const Icon = category.icon}
-        <button
-          class:active={$currentCategory === category.name}
-          onclick={() => handleCategoryClick(category.name)}
-        >
-          <Icon size={16} />
-          {category.name}
-        </button>
-      {/each}
-    </div>
+    {#if showCategorySidebar}
+      <div class="categories" data-testid="catalog-sidebar">
+        {#each categories as category (category.name)}
+          {@const Icon = category.icon}
+          <button
+            class:active={$currentCategory === category.name}
+            onclick={() => handleCategoryClick(category.name)}
+          >
+            <Icon size={16} />
+            {category.name}
+          </button>
+        {/each}
+      </div>
 
-    <div class="separator"></div>
+      <div class="separator"></div>
+    {/if}
 
     {#if $currentCategory === "Multiplayer"}
       <MultiplayerView />
@@ -3879,7 +3898,8 @@
 
   .controls-container {
     height: 75px;
-    width: 100%;
+    /* Match the scroll container so the sort menu stays clear of its scrollbar */
+    width: calc(100% - 2rem);
     display: flex;
     position: absolute;
     justify-content: space-between;
@@ -4702,8 +4722,8 @@
 
   .mods-wrapper {
     position: relative;
-    /*192px being the width of the catagories + seperator*/
-    width: calc(100% - 192px);
+    flex: 1;
+    min-width: 0;
     padding: 0 1rem;
     display: flex;
     flex-direction: column;
