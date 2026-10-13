@@ -447,9 +447,21 @@ pub async fn find_item(key: &str) -> Option<ArchiveModItem> {
     find_in(&items, key).cloned()
 }
 
-/// Official download URL of `ts://Namespace-Name[@version]`, Ok(None) when the package is
-/// not in `packages`
-pub fn resolve_ts_in(reference: &str, packages: &[TsPackage]) -> Result<Option<String>, String> {
+/// A `ts://` reference resolved against the listing, with the package's canonical names
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TsTarget {
+    pub namespace: String,
+    pub name: String,
+    pub version: String,
+    pub download_url: String,
+}
+
+/// Resolves `ts://Namespace-Name[@version]` to an active version, Ok(None) when the package
+/// is not in `packages`
+pub fn resolve_ts_target_in(
+    reference: &str,
+    packages: &[TsPackage],
+) -> Result<Option<TsTarget>, String> {
     let (full_name, version) = parse_ts_ref(reference)
         .ok_or_else(|| format!("'{reference}' is not a valid Thunderstore package reference"))?;
     if thunderstore::is_lovely(&full_name) {
@@ -469,18 +481,27 @@ pub fn resolve_ts_in(reference: &str, packages: &[TsPackage]) -> Result<Option<S
     };
     let (namespace, name) = thunderstore::split_full_name(&pkg.full_name)
         .ok_or_else(|| format!("invalid package name '{}'", pkg.full_name))?;
-    Ok(Some(thunderstore::download_url(
-        namespace,
-        name,
-        &version.version_number,
-    )))
+    Ok(Some(TsTarget {
+        namespace: namespace.to_string(),
+        name: name.to_string(),
+        version: version.version_number.clone(),
+        download_url: thunderstore::download_url(namespace, name, &version.version_number),
+    }))
 }
 
-async fn resolve_ts(reference: &str) -> Result<String, String> {
-    if let Some(url) = resolve_ts_in(reference, &thunderstore::cached_packages().await?)? {
-        return Ok(url);
+/// Official download URL of `ts://Namespace-Name[@version]`, Ok(None) when the package is
+/// not in `packages`
+#[cfg(test)]
+pub fn resolve_ts_in(reference: &str, packages: &[TsPackage]) -> Result<Option<String>, String> {
+    Ok(resolve_ts_target_in(reference, packages)?.map(|t| t.download_url))
+}
+
+pub async fn resolve_ts_target(reference: &str) -> Result<TsTarget, String> {
+    if let Some(target) = resolve_ts_target_in(reference, &thunderstore::cached_packages().await?)?
+    {
+        return Ok(target);
     }
-    resolve_ts_in(reference, &thunderstore::sync(true).await?)?.ok_or_else(|| {
+    resolve_ts_target_in(reference, &thunderstore::sync(true).await?)?.ok_or_else(|| {
         format!("'{reference}' is no longer on Thunderstore, refresh the catalog and reinstall")
     })
 }
@@ -490,7 +511,7 @@ async fn resolve_ts(reference: &str) -> Result<String, String> {
 pub async fn resolve_install_url(url: &str) -> Result<String, String> {
     let url = url.trim();
     let resolved = if url.starts_with(TS_URL_SCHEME) {
-        resolve_ts(url).await?
+        resolve_ts_target(url).await?.download_url
     } else if mod_index::strip_index_scheme(url).is_some() {
         mod_index::resolve_install_url(url).await?
     } else {
@@ -846,6 +867,39 @@ mod tests {
         assert!(resolve_ts_in("ts://Thunderstore-lovely", &packages).is_err());
         assert!(resolve_ts_in("ts://Steamodded-Steamodded", &packages).is_err());
         assert!(resolve_ts_in("ts://not valid", &packages).is_err());
+    }
+
+    #[test]
+    fn ts_targets_use_canonical_names_accepted_by_the_installer() {
+        let packages = fixture_packages();
+        let target = resolve_ts_target_in("ts://NH6574-jokerdisplay", &packages)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            (target.namespace.as_str(), target.name.as_str()),
+            ("nh6574", "JokerDisplay")
+        );
+        bmm_lib::installer::validate_thunderstore_download_url(
+            &target.download_url,
+            &target.namespace,
+            &target.name,
+        )
+        .unwrap();
+        for pkg in &packages {
+            if let Ok(Some(t)) = resolve_ts_target_in(&format!("ts://{}", pkg.full_name), &packages)
+            {
+                assert!(
+                    bmm_lib::installer::validate_thunderstore_download_url(
+                        &t.download_url,
+                        &t.namespace,
+                        &t.name
+                    )
+                    .is_ok(),
+                    "{} rejected by the installer",
+                    pkg.full_name
+                );
+            }
+        }
     }
 
     #[test]

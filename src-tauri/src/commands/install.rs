@@ -1070,17 +1070,31 @@ pub async fn install_mod(
     let mut last_error: Option<String> = None;
     let mut delay = Duration::from_millis(500);
 
-    let resolved_url = crate::catalog::resolve_install_url(&url).await?;
+    // ts:// packages go through the Thunderstore installer for its layout fixes and
+    // Namespace-Name folder, so folder_name does not apply to them
+    let ts_target = if url.trim().starts_with(crate::catalog::TS_URL_SCHEME) {
+        Some(crate::catalog::resolve_ts_target(&url).await?)
+    } else {
+        None
+    };
+    let resolved_url = match &ts_target {
+        Some(target) => target.download_url.clone(),
+        None => crate::catalog::resolve_install_url(&url).await?,
+    };
 
     for attempt in 1..=INSTALL_MAX_RETRIES {
-        // Attempt to install the mod
-        match bmm_lib::installer::install_mod(resolved_url.clone(), folder_name_opt.clone()).await {
+        let result = match &ts_target {
+            Some(target) => install_thunderstore_target(target).await,
+            None => bmm_lib::installer::install_mod(resolved_url.clone(), folder_name_opt.clone())
+                .await
+                .map_err(|e| e.to_string()),
+        };
+        match result {
             Ok(path) => {
                 sync_compat_helper_after_mod_change(&state).await;
                 return Ok(path);
             }
-            Err(e) => {
-                let error_str = e.to_string();
+            Err(error_str) => {
                 // Check if it's a rate limit error (HTTP 429)
                 if is_rate_limit_error(&error_str) && attempt < INSTALL_MAX_RETRIES {
                     log::warn!(
@@ -1101,6 +1115,25 @@ pub async fn install_mod(
 
     // All retries exhausted
     Err(last_error.unwrap_or_else(|| "Mod installation failed after retries".to_string()))
+}
+
+async fn install_thunderstore_target(target: &crate::catalog::TsTarget) -> Result<PathBuf, String> {
+    let install = bmm_lib::installer::install_thunderstore_package(
+        &target.download_url,
+        &target.namespace,
+        &target.name,
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+    for warning in &install.warnings {
+        log::warn!("{}: {}", install.folder_name, warning);
+    }
+    install.path.ok_or_else(|| {
+        format!(
+            "{} {} has no mod files to install",
+            install.folder_name, target.version
+        )
+    })
 }
 
 /// Check if an error message indicates a rate limit (HTTP 429) error.
