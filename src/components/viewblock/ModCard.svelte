@@ -431,41 +431,47 @@
       </div>
     {/if}
 
-    {#if !mod.orphaned && (mod.publisher || downloadsLabel)}
-      <div class="meta-tags">
-        {#if mod.publisher}
-          <span class="tag meta-owner" title={`By ${mod.publisher}`}>
-            <User size={11} />
-            <span class="meta-text">{mod.publisher}</span>
-          </span>
-        {/if}
-        {#if downloadsLabel}
-          <span
-            class="tag meta-downloads"
-            title={`${mod.downloads?.toLocaleString()} downloads on Thunderstore`}
-          >
-            <ArrowDownToLine size={11} />
-            {downloadsLabel}
-          </span>
-        {/if}
-      </div>
-    {/if}
+    <div class="chip-row">
+      {#if !mod.orphaned && (mod.publisher || downloadsLabel)}
+        <div class="meta-tags">
+          {#if mod.publisher}
+            <span class="tag meta-owner" title={`By ${mod.publisher}`}>
+              <User size={11} />
+              <span class="meta-text">{mod.publisher}</span>
+            </span>
+          {/if}
+          {#if downloadsLabel}
+            <span
+              class="tag meta-downloads"
+              title={`${mod.downloads?.toLocaleString()} downloads on Thunderstore`}
+            >
+              <ArrowDownToLine size={11} />
+              {downloadsLabel}
+            </span>
+          {/if}
+        </div>
+      {/if}
 
-    <div class="tags">
-      {#if mod.orphaned}
-        <span
-          class="tag orphaned"
-          title="This mod was removed from the remote index. It is still installed locally and can be uninstalled at any time."
-        >
-          Removed from index
-        </span>
-        {#if mod.installedVersion}
+      <div class="tags">
+        {#if mod.orphaned}
+          <span
+            class="tag orphaned"
+            title="This mod was removed from the remote index. It is still installed locally and can be uninstalled at any time."
+          >
+            Removed from index
+          </span>
+        {/if}
+        {#if mod.orphaned && mod.installedVersion}
           <span class="tag version" title="Installed version">
             {mod.installedVersion}
           </span>
         {/if}
-      {/if}
-      <LastUpdated value={mod.last_updated} class="tag updated" iconSize={11} />
+        <LastUpdated
+          value={mod.last_updated}
+          class="tag updated"
+          iconSize={11}
+        />
+      </div>
     </div>
   </div>
 
@@ -630,12 +636,24 @@
 
   /* Image styling handled inside LazyImage */
 
-  .tags {
+  /* Owner and date chips share one row along the bottom of the thumbnail, the
+     owner chip shrinks first so the two never overlap */
+  .chip-row {
     position: absolute;
-    top: 7.2rem;
+    left: 0.35rem;
     right: 0.35rem;
+    bottom: 0.4rem;
     display: flex;
-    gap: 0.5rem;
+    align-items: center;
+    gap: 0.3rem;
+    min-width: 0;
+  }
+
+  .tags {
+    display: flex;
+    gap: 0.3rem;
+    margin-left: auto;
+    flex-shrink: 0;
   }
 
   .tags :global(.tag) {
@@ -696,13 +714,10 @@
   }
 
   .meta-tags {
-    position: absolute;
-    top: 7.2rem;
-    left: 0.35rem;
     display: flex;
     gap: 0.3rem;
-    max-width: 55%;
     min-width: 0;
+    flex: 0 1 auto;
   }
 
   .meta-tags .tag {
