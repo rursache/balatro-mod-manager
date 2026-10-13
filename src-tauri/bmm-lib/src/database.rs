@@ -22,8 +22,14 @@ pub struct Database {
     conn: Connection,
 }
 
+/// Source of mods installed from the GitHub mod index (and of every row
+/// created before sources were tracked)
+pub const SOURCE_INDEX: &str = "index";
+/// Source of mods installed from Thunderstore, `source_id` is `Namespace-Name`
+pub const SOURCE_THUNDERSTORE: &str = "thunderstore";
+
 /// Represents an installed mod stored in the database.
-#[derive(Serialize)]
+#[derive(Serialize, Debug, Clone)]
 pub struct InstalledMod {
     /// The display name of the mod.
     pub name: String,
@@ -38,10 +44,70 @@ pub struct InstalledMod {
     /// after a successful catalog fetch.
     #[serde(default)]
     pub orphaned: bool,
+    /// Where the mod was installed from, see [`SOURCE_INDEX`] and [`SOURCE_THUNDERSTORE`]
+    pub source: String,
+    /// Stable package identity within `source`, `Namespace-Name` for Thunderstore
+    pub source_id: Option<String>,
+    /// Unix seconds of the last install or update, None for rows that predate it
+    pub installed_at: Option<i64>,
+}
+
+const INSTALLED_MOD_COLUMNS: &str =
+    "name, path, dependencies, current_version, orphaned, source, source_id, installed_at";
+
+impl InstalledMod {
+    fn from_row(row: &rusqlite::Row<'_>) -> Result<Self, AppError> {
+        Ok(InstalledMod {
+            name: row.get(0)?,
+            path: row.get(1)?,
+            dependencies: serde_json::from_str(&row.get::<_, String>(2)?)?,
+            current_version: row.get(3)?,
+            orphaned: row.get::<_, i64>(4)? != 0,
+            source: row.get(5)?,
+            source_id: row.get(6)?,
+            installed_at: row.get(7)?,
+        })
+    }
+
+    /// The Thunderstore namespace when this row was installed from Thunderstore
+    pub fn thunderstore_namespace(&self) -> Option<&str> {
+        if self.source != SOURCE_THUNDERSTORE {
+            return None;
+        }
+        self.source_id
+            .as_deref()
+            .and_then(|id| id.split_once('-'))
+            .map(|(ns, _)| ns)
+    }
+}
+
+fn unix_now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+/// Name for a row whose wanted `name` is already used by another package:
+/// `Name (Namespace)`, then `Name (Namespace) 2` and so on
+fn disambiguated_name(name: &str, source_id: &str, taken: impl Fn(&str) -> bool) -> String {
+    let qualifier = source_id
+        .split_once('-')
+        .map(|(ns, _)| ns)
+        .filter(|ns| !ns.is_empty())
+        .unwrap_or(source_id);
+    let base = format!("{name} ({qualifier})");
+    if !taken(&base) {
+        return base;
+    }
+    (2u32..)
+        .map(|n| format!("{base} {n}"))
+        .find(|candidate| !taken(candidate))
+        .unwrap_or(base)
 }
 
 impl Database {
-    const CURRENT_DB_VERSION: (u32, u32) = (1, 3); // Update this when schema changes
+    const CURRENT_DB_VERSION: (u32, u32) = (1, 4); // Update this when schema changes
 
     /// Converts a version tuple to a string representation.
     fn version_to_string(v: (u32, u32)) -> String {
@@ -74,6 +140,13 @@ impl Database {
             .ok_or_else(|| AppError::DirNotFound(PathBuf::from("config directory")))?;
         let balatro_dir = config_dir.join("Balatro");
         let storage_path = resolve_storage_path(&balatro_dir);
+        Self::open_at(&storage_path)
+    }
+
+    /// Opens or creates the database file at `storage_path`, migrating it to
+    /// the current schema when needed
+    pub fn open_at(storage_path: &Path) -> Result<Self, AppError> {
+        let storage_path = storage_path.to_path_buf();
 
         // Create directory if it doesn't exist (only for the primary config path)
         if let Some(parent) = storage_path.parent()
@@ -380,32 +453,69 @@ impl Database {
             return Ok(()); // No mods to migrate
         }
 
-        // Get all installed mods
-        let mut stmt = match old_conn
-            .prepare("SELECT name, path, dependencies, current_version FROM installed_mods")
-        {
+        // Columns added by later schema versions are copied when the old table has them
+        let old_columns = Self::table_columns(old_conn, "installed_mods");
+        let optional = |column: &str, fallback: &str| {
+            if old_columns.iter().any(|c| c == column) {
+                column.to_string()
+            } else {
+                fallback.to_string()
+            }
+        };
+        let query = format!(
+            "SELECT name, path, dependencies, current_version, {}, {}, {}, {} FROM installed_mods",
+            optional("orphaned", "0"),
+            optional("source", "NULL"),
+            optional("source_id", "NULL"),
+            optional("installed_at", "NULL"),
+        );
+
+        let mut stmt = match old_conn.prepare(&query) {
             Ok(stmt) => stmt,
             Err(_) => return Ok(()), // If query fails, just continue
         };
 
-        for (name, path, dependencies, current_version) in stmt
-            .query_map([], |row| {
+        for (name, path, dependencies, current_version, orphaned, source, source_id, installed_at) in
+            stmt.query_map([], |row| {
                 Ok((
                     row.get::<_, String>(0)?,
                     row.get::<_, String>(1)?,
                     row.get::<_, String>(2)?,
                     row.get::<_, Option<String>>(3)?,
+                    row.get::<_, Option<i64>>(4)?,
+                    row.get::<_, Option<String>>(5)?,
+                    row.get::<_, Option<String>>(6)?,
+                    row.get::<_, Option<i64>>(7)?,
                 ))
             })?
             .flatten()
         {
             new_conn.execute(
-            "INSERT INTO installed_mods (name, path, dependencies, current_version) VALUES (?1, ?2, ?3, ?4)",
-            [&name, &path, &dependencies, &current_version.unwrap_or_default()],
-        )?;
+                "INSERT INTO installed_mods (name, path, dependencies, current_version, orphaned, source, source_id, installed_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                rusqlite::params![
+                    name,
+                    path,
+                    dependencies,
+                    current_version.unwrap_or_default(),
+                    orphaned.unwrap_or(0),
+                    source.unwrap_or_else(|| SOURCE_INDEX.to_string()),
+                    source_id,
+                    installed_at,
+                ],
+            )?;
         }
 
         Ok(())
+    }
+
+    fn table_columns(conn: &Connection, table: &str) -> Vec<String> {
+        let Ok(mut stmt) = conn.prepare(&format!("PRAGMA table_info({table})")) else {
+            return Vec::new();
+        };
+        stmt.query_map([], |row| row.get::<_, String>(1))
+            .map(|rows| rows.flatten().collect())
+            .unwrap_or_default()
     }
 
     fn initialize_database(conn: &Connection) -> Result<(), AppError> {
@@ -434,8 +544,19 @@ impl Database {
                 path TEXT NOT NULL,
                 dependencies TEXT NOT NULL DEFAULT '[]',
                 current_version TEXT,
-                orphaned INTEGER NOT NULL DEFAULT 0
+                orphaned INTEGER NOT NULL DEFAULT 0,
+                source TEXT NOT NULL DEFAULT 'index',
+                source_id TEXT,
+                installed_at INTEGER
             )",
+            [],
+        )
+        .map_err(|e| AppError::DatabaseInit(e.to_string()))?;
+
+        // One row per package, rows without a source_id are not constrained
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_installed_mods_source_id
+             ON installed_mods(source, source_id) WHERE source_id IS NOT NULL",
             [],
         )
         .map_err(|e| AppError::DatabaseInit(e.to_string()))?;
@@ -471,20 +592,14 @@ impl Database {
     }
 
     pub fn get_mod_details(&self, mod_name: &str) -> Result<InstalledMod, AppError> {
-        let mut stmt = self.conn.prepare(
-            "SELECT name, path, dependencies, current_version, orphaned FROM installed_mods WHERE name = ?1",
-        )?;
+        let mut stmt = self.conn.prepare_cached(&format!(
+            "SELECT {INSTALLED_MOD_COLUMNS} FROM installed_mods WHERE name = ?1"
+        ))?;
 
         let mut rows = stmt.query([mod_name])?;
 
         if let Some(row) = rows.next()? {
-            Ok(InstalledMod {
-                name: row.get(0)?,
-                path: row.get(1)?,
-                dependencies: serde_json::from_str(&row.get::<_, String>(2)?)?,
-                current_version: row.get(3)?,
-                orphaned: row.get::<_, i64>(4)? != 0,
-            })
+            InstalledMod::from_row(row)
         } else {
             Err(AppError::InvalidState(format!("Mod {mod_name} not found")))
         }
@@ -539,25 +654,21 @@ impl Database {
 
     pub fn get_installed_mods(&self) -> Result<Vec<InstalledMod>, AppError> {
         // Use prepare_cached for frequently called queries to avoid re-parsing SQL
-        let mut stmt = self.conn.prepare_cached(
-            "SELECT name, path, dependencies, current_version, orphaned FROM installed_mods",
-        )?;
+        let mut stmt = self.conn.prepare_cached(&format!(
+            "SELECT {INSTALLED_MOD_COLUMNS} FROM installed_mods"
+        ))?;
         let mut mods = Vec::new();
         let mut rows = stmt.query([])?;
 
         while let Some(row) = rows.next()? {
-            mods.push(InstalledMod {
-                name: row.get(0)?,
-                path: row.get(1)?,
-                dependencies: serde_json::from_str(&row.get::<_, String>(2)?)?,
-                current_version: row.get(3)?,
-                orphaned: row.get::<_, i64>(4)? != 0,
-            });
+            mods.push(InstalledMod::from_row(row)?);
         }
 
         Ok(mods)
     }
 
+    /// Records an index install of `name`, replacing any row with that name.
+    /// The row becomes `source = 'index'` without a source_id
     pub fn add_installed_mod(
         &self,
         name: &str,
@@ -567,8 +678,179 @@ impl Database {
     ) -> Result<(), AppError> {
         let deps_json = serde_json::to_string(dependencies)?;
         self.conn.execute(
-            "INSERT OR REPLACE INTO installed_mods (name, path, dependencies, current_version) VALUES (?1, ?2, ?3, ?4)",
-            [name, path, &deps_json, &current_version.unwrap_or_default()],
+            "INSERT OR REPLACE INTO installed_mods (name, path, dependencies, current_version, source, installed_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            rusqlite::params![
+                name,
+                path,
+                deps_json,
+                current_version.unwrap_or_default(),
+                SOURCE_INDEX,
+                unix_now(),
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Records an install from `source`, returning the row name actually used
+    ///
+    /// - with a `source_id` that is already tracked, that row is updated in
+    ///   place and keeps its name, so dependents and the UI stay stable
+    /// - when `name` is taken by a row of a different package, the new row is
+    ///   named `Name (Namespace)`
+    /// - without a `source_id` this behaves like [`Self::add_installed_mod`]
+    ///   for the given source
+    ///
+    /// Switching an existing row to another source goes through
+    /// [`Self::switch_installed_mod_source`] instead
+    pub fn add_installed_mod_with_source(
+        &self,
+        name: &str,
+        path: &str,
+        dependencies: &[String],
+        current_version: Option<String>,
+        source: &str,
+        source_id: Option<&str>,
+    ) -> Result<String, AppError> {
+        let deps_json = serde_json::to_string(dependencies)?;
+        let version = current_version.unwrap_or_default();
+        let now = unix_now();
+
+        let Some(source_id) = source_id.filter(|id| !id.trim().is_empty()) else {
+            self.conn.execute(
+                "INSERT OR REPLACE INTO installed_mods (name, path, dependencies, current_version, source, installed_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                rusqlite::params![name, path, deps_json, version, source, now],
+            )?;
+            return Ok(name.to_string());
+        };
+
+        if let Some(existing) = self.find_by_source(source, source_id)? {
+            self.conn.execute(
+                "UPDATE installed_mods
+                 SET path = ?1, dependencies = ?2, current_version = ?3, orphaned = 0, installed_at = ?4
+                 WHERE name = ?5",
+                rusqlite::params![path, deps_json, version, now, existing.name],
+            )?;
+            return Ok(existing.name);
+        }
+
+        let taken = |candidate: &str| -> bool {
+            self.conn
+                .query_row(
+                    "SELECT 1 FROM installed_mods WHERE lower(name) = lower(?1)",
+                    [candidate],
+                    |_| Ok(()),
+                )
+                .is_ok()
+        };
+        let final_name = if taken(name) {
+            disambiguated_name(name, source_id, taken)
+        } else {
+            name.to_string()
+        };
+
+        self.conn.execute(
+            "INSERT INTO installed_mods (name, path, dependencies, current_version, orphaned, source, source_id, installed_at)
+             VALUES (?1, ?2, ?3, ?4, 0, ?5, ?6, ?7)",
+            rusqlite::params![final_name, path, deps_json, version, source, source_id, now],
+        )?;
+        Ok(final_name)
+    }
+
+    /// Moves the row `name` to another source, for source switches and the
+    /// legacy Multiplayer migration. The row keeps its name and loses its
+    /// orphaned flag. Fails when another row already tracks the target package
+    pub fn switch_installed_mod_source(
+        &self,
+        name: &str,
+        path: &str,
+        dependencies: &[String],
+        current_version: Option<String>,
+        source: &str,
+        source_id: Option<&str>,
+    ) -> Result<(), AppError> {
+        let source_id = source_id.filter(|id| !id.trim().is_empty());
+        if let Some(id) = source_id
+            && let Some(other) = self.find_by_source(source, id)?
+            && other.name != name
+        {
+            return Err(AppError::InvalidState(format!(
+                "{id} is already tracked as {}",
+                other.name
+            )));
+        }
+        let deps_json = serde_json::to_string(dependencies)?;
+        let updated = self.conn.execute(
+            "UPDATE installed_mods
+             SET path = ?1, dependencies = ?2, current_version = ?3, orphaned = 0,
+                 source = ?4, source_id = ?5, installed_at = ?6
+             WHERE name = ?7",
+            rusqlite::params![
+                path,
+                deps_json,
+                current_version.unwrap_or_default(),
+                source,
+                source_id,
+                unix_now(),
+                name,
+            ],
+        )?;
+        if updated == 0 {
+            return Err(AppError::InvalidState(format!("Mod {name} not found")));
+        }
+        Ok(())
+    }
+
+    /// The row tracking `source_id` from any source, if installed
+    pub fn get_installed_by_source_id(
+        &self,
+        source_id: &str,
+    ) -> Result<Option<InstalledMod>, AppError> {
+        let mut stmt = self.conn.prepare_cached(&format!(
+            "SELECT {INSTALLED_MOD_COLUMNS} FROM installed_mods
+             WHERE lower(source_id) = lower(?1) ORDER BY installed_at DESC LIMIT 1"
+        ))?;
+        let mut rows = stmt.query([source_id])?;
+        match rows.next()? {
+            Some(row) => Ok(Some(InstalledMod::from_row(row)?)),
+            None => Ok(None),
+        }
+    }
+
+    fn find_by_source(
+        &self,
+        source: &str,
+        source_id: &str,
+    ) -> Result<Option<InstalledMod>, AppError> {
+        let mut stmt = self.conn.prepare_cached(&format!(
+            "SELECT {INSTALLED_MOD_COLUMNS} FROM installed_mods
+             WHERE source = ?1 AND lower(source_id) = lower(?2) LIMIT 1"
+        ))?;
+        let mut rows = stmt.query([source, source_id])?;
+        match rows.next()? {
+            Some(row) => Ok(Some(InstalledMod::from_row(row)?)),
+            None => Ok(None),
+        }
+    }
+
+    /// Writes `record` as is, replacing any row with the same name or package.
+    /// Used to restore backups
+    pub fn put_installed_mod(&self, record: &InstalledMod) -> Result<(), AppError> {
+        let deps_json = serde_json::to_string(&record.dependencies)?;
+        self.conn.execute(
+            "INSERT OR REPLACE INTO installed_mods (name, path, dependencies, current_version, orphaned, source, source_id, installed_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            rusqlite::params![
+                record.name,
+                record.path,
+                deps_json,
+                record.current_version.clone().unwrap_or_default(),
+                record.orphaned as i64,
+                record.source,
+                record.source_id,
+                record.installed_at,
+            ],
         )?;
         Ok(())
     }
@@ -647,29 +929,65 @@ impl Database {
         Ok(())
     }
 
-    /// Reconcile the orphaned flag for every installed mod given the set of
-    /// titles currently present in the remote index. Names not found in
+    /// Reconcile the orphaned flag for every index installed mod given the set
+    /// of titles currently present in the remote index. Names not found in
     /// `present` get `orphaned = 1`; names found get `orphaned = 0`.
     /// Comparison is case-insensitive. Runs inside a single transaction.
+    /// Rows from other sources are left untouched, see
+    /// [`Self::reconcile_orphaned_mods_by_source`].
     /// Returns the list of mod names whose orphaned state changed.
     pub fn reconcile_orphaned_mods(
         &mut self,
         present: &std::collections::HashSet<String>,
     ) -> Result<Vec<String>, AppError> {
+        self.reconcile_orphans(present, None)
+    }
+
+    /// Like [`Self::reconcile_orphaned_mods`], and Thunderstore rows are
+    /// orphaned only when their source_id (`Namespace-Name`) is missing from
+    /// `present_thunderstore`. Thunderstore rows without a source_id keep their flag
+    pub fn reconcile_orphaned_mods_by_source(
+        &mut self,
+        present_index_titles: &std::collections::HashSet<String>,
+        present_thunderstore: &std::collections::HashSet<String>,
+    ) -> Result<Vec<String>, AppError> {
+        self.reconcile_orphans(present_index_titles, Some(present_thunderstore))
+    }
+
+    fn reconcile_orphans(
+        &mut self,
+        present: &std::collections::HashSet<String>,
+        present_thunderstore: Option<&std::collections::HashSet<String>>,
+    ) -> Result<Vec<String>, AppError> {
         let lowered: std::collections::HashSet<String> =
             present.iter().map(|s| s.to_lowercase()).collect();
+        let lowered_ts: Option<std::collections::HashSet<String>> =
+            present_thunderstore.map(|ids| ids.iter().map(|s| s.to_lowercase()).collect());
 
         let tx = self.conn.transaction()?;
         let mut changed: Vec<String> = Vec::new();
         {
-            let mut stmt = tx.prepare("SELECT name, orphaned FROM installed_mods")?;
+            let mut stmt =
+                tx.prepare("SELECT name, orphaned, source, source_id FROM installed_mods")?;
             let rows = stmt
                 .query_map([], |row| {
-                    Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)? != 0))
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, i64>(1)? != 0,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, Option<String>>(3)?,
+                    ))
                 })?
                 .collect::<Result<Vec<_>, _>>()?;
-            for (name, prev) in rows {
-                let should_be_orphan = !lowered.contains(&name.to_lowercase());
+            for (name, prev, source, source_id) in rows {
+                let should_be_orphan = match source.as_str() {
+                    SOURCE_INDEX => !lowered.contains(&name.to_lowercase()),
+                    SOURCE_THUNDERSTORE => match (&lowered_ts, source_id) {
+                        (Some(ids), Some(id)) => !ids.contains(&id.to_lowercase()),
+                        _ => continue,
+                    },
+                    _ => continue,
+                };
                 if should_be_orphan != prev {
                     let flag: i64 = if should_be_orphan { 1 } else { 0 };
                     tx.execute(
@@ -1073,6 +1391,259 @@ mod tests {
         // REPLACE writes a fresh row.
         db.add_installed_mod("Foo", "/p/foo", &[], None)?;
         assert!(!db.get_mod_details("Foo")?.orphaned);
+        Ok(())
+    }
+
+    // Schema and data as written by app versions using db_version 1.3
+    fn write_v1_3_database(path: &Path) {
+        let conn = Connection::open(path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE settings (setting TEXT PRIMARY KEY, value TEXT NOT NULL);
+             CREATE TABLE installed_mods (
+                 name TEXT PRIMARY KEY,
+                 path TEXT NOT NULL,
+                 dependencies TEXT NOT NULL DEFAULT '[]',
+                 current_version TEXT,
+                 orphaned INTEGER NOT NULL DEFAULT 0
+             );
+             CREATE INDEX idx_installed_mods_path ON installed_mods(path);
+             CREATE INDEX idx_installed_mods_name ON installed_mods(name);
+             INSERT INTO settings VALUES ('db_version', '1.3');
+             INSERT INTO settings VALUES ('installation_path', '/games/balatro');
+             INSERT INTO settings VALUES ('lovely_version', '0.9.0');
+             INSERT INTO settings VALUES ('security_warning_acknowledged', 'yes');
+             INSERT INTO installed_mods VALUES ('Steamodded', '/mods/Steamodded', '[]', '26.1002.0', 0);
+             INSERT INTO installed_mods VALUES ('Multiplayer', '/mods/Multiplayer', '[\"Steamodded\"]', 'v0.5.4', 1);",
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn migrates_v1_3_database_to_sources() -> Result<(), AppError> {
+        let td = tempfile::tempdir().unwrap();
+        let db_path = td.path().join("bmm_storage.db");
+        write_v1_3_database(&db_path);
+
+        let db = Database::open_at(&db_path)?;
+
+        let version: String = db.conn.query_row(
+            "SELECT value FROM settings WHERE setting = 'db_version'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(version, "1.4");
+        assert_eq!(db.get_installation_path()?, Some("/games/balatro".into()));
+        assert_eq!(db.get_lovely_version()?, Some("0.9.0".into()));
+        assert!(db.is_security_warning_acknowledged()?);
+        assert!(td.path().join("bmm_storage.db.bak").exists());
+
+        let mut mods = db.get_installed_mods()?;
+        mods.sort_by(|a, b| a.name.cmp(&b.name));
+        assert_eq!(mods.len(), 2);
+        for m in &mods {
+            assert_eq!(m.source, SOURCE_INDEX);
+            assert!(m.source_id.is_none());
+            assert!(m.installed_at.is_none());
+        }
+        assert_eq!(mods[0].name, "Multiplayer");
+        assert!(mods[0].orphaned, "orphaned flag must survive the migration");
+        assert_eq!(mods[0].current_version.as_deref(), Some("v0.5.4"));
+        assert_eq!(mods[0].dependencies, vec!["Steamodded".to_string()]);
+        assert!(!mods[1].orphaned);
+
+        // Reopening a current database does not migrate again
+        drop(db);
+        std::fs::remove_file(td.path().join("bmm_storage.db.bak")).unwrap();
+        let db = Database::open_at(&db_path)?;
+        assert_eq!(db.get_installed_mods()?.len(), 2);
+        assert!(!td.path().join("bmm_storage.db.bak").exists());
+        Ok(())
+    }
+
+    #[test]
+    fn new_rows_record_source_and_install_time() -> Result<(), AppError> {
+        let db = create_memory_db()?;
+        db.add_installed_mod("IndexMod", "/p/index", &[], Some("1.0".into()))?;
+        let name = db.add_installed_mod_with_source(
+            "Multiplayer",
+            "/p/BalatroMultiplayer-Multiplayer",
+            &["Steamodded".into()],
+            Some("0.5.7".into()),
+            SOURCE_THUNDERSTORE,
+            Some("BalatroMultiplayer-Multiplayer"),
+        )?;
+        assert_eq!(name, "Multiplayer");
+
+        let index = db.get_mod_details("IndexMod")?;
+        assert_eq!(index.source, SOURCE_INDEX);
+        assert!(index.installed_at.is_some());
+
+        let ts = db
+            .get_installed_by_source_id("BalatroMultiplayer-Multiplayer")?
+            .expect("tracked by source id");
+        assert_eq!(ts.name, "Multiplayer");
+        assert_eq!(ts.source, SOURCE_THUNDERSTORE);
+        assert_eq!(ts.thunderstore_namespace(), Some("BalatroMultiplayer"));
+        assert_eq!(ts.current_version.as_deref(), Some("0.5.7"));
+        assert!(db.get_installed_by_source_id("Nobody-Nothing")?.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn same_source_id_updates_row_in_place() -> Result<(), AppError> {
+        let db = create_memory_db()?;
+        db.add_installed_mod_with_source(
+            "Pokermon",
+            "/p/v1",
+            &[],
+            Some("1.0.0".into()),
+            SOURCE_THUNDERSTORE,
+            Some("InertSteak-Pokermon"),
+        )?;
+        let name = db.add_installed_mod_with_source(
+            "Pokermon Renamed",
+            "/p/v2",
+            &[],
+            Some("1.1.0".into()),
+            SOURCE_THUNDERSTORE,
+            Some("InertSteak-Pokermon"),
+        )?;
+        assert_eq!(name, "Pokermon");
+        let mods = db.get_installed_mods()?;
+        assert_eq!(mods.len(), 1);
+        assert_eq!(mods[0].path, "/p/v2");
+        assert_eq!(mods[0].current_version.as_deref(), Some("1.1.0"));
+        Ok(())
+    }
+
+    #[test]
+    fn name_taken_by_another_package_is_disambiguated() -> Result<(), AppError> {
+        let db = create_memory_db()?;
+        db.add_installed_mod("Pokermon", "/p/index-pokermon", &[], None)?;
+
+        let first = db.add_installed_mod_with_source(
+            "Pokermon",
+            "/p/PokermonPlus-Pokermon",
+            &[],
+            None,
+            SOURCE_THUNDERSTORE,
+            Some("PokermonPlus-Pokermon"),
+        )?;
+        assert_eq!(first, "Pokermon (PokermonPlus)");
+
+        let second = db.add_installed_mod_with_source(
+            "pokermon",
+            "/p/Other-Pokermon",
+            &[],
+            None,
+            SOURCE_THUNDERSTORE,
+            Some("PokermonPlus-pokermon_fork"),
+        )?;
+        assert_eq!(second, "pokermon (PokermonPlus) 2");
+
+        // The original index row is untouched
+        let index = db.get_mod_details("Pokermon")?;
+        assert_eq!(index.path, "/p/index-pokermon");
+        assert_eq!(index.source, SOURCE_INDEX);
+        assert_eq!(db.get_installed_mods()?.len(), 3);
+        Ok(())
+    }
+
+    #[test]
+    fn switch_source_keeps_name_and_clears_orphan() -> Result<(), AppError> {
+        let mut db = create_memory_db()?;
+        db.add_installed_mod("Multiplayer", "/p/Multiplayer", &[], Some("v0.5.4".into()))?;
+        db.reconcile_orphaned_mods(&std::collections::HashSet::new())?;
+        assert!(db.get_mod_details("Multiplayer")?.orphaned);
+
+        db.switch_installed_mod_source(
+            "Multiplayer",
+            "/p/BalatroMultiplayer-Multiplayer",
+            &["Steamodded".into()],
+            Some("0.5.7".into()),
+            SOURCE_THUNDERSTORE,
+            Some("BalatroMultiplayer-Multiplayer"),
+        )?;
+        let row = db.get_mod_details("Multiplayer")?;
+        assert!(!row.orphaned);
+        assert_eq!(row.source, SOURCE_THUNDERSTORE);
+        assert_eq!(
+            row.source_id.as_deref(),
+            Some("BalatroMultiplayer-Multiplayer")
+        );
+        assert_eq!(row.path, "/p/BalatroMultiplayer-Multiplayer");
+
+        // A second row cannot claim the same package
+        db.add_installed_mod("Other", "/p/other", &[], None)?;
+        assert!(
+            db.switch_installed_mod_source(
+                "Other",
+                "/p/other",
+                &[],
+                None,
+                SOURCE_THUNDERSTORE,
+                Some("BalatroMultiplayer-Multiplayer"),
+            )
+            .is_err()
+        );
+        assert!(
+            db.switch_installed_mod_source("Missing", "/p", &[], None, SOURCE_INDEX, None)
+                .is_err()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn reconcile_is_source_aware() -> Result<(), AppError> {
+        use std::collections::HashSet;
+        let mut db = create_memory_db()?;
+        db.add_installed_mod("IndexMod", "/p/index", &[], None)?;
+        db.add_installed_mod_with_source(
+            "TsMod",
+            "/p/ts",
+            &[],
+            None,
+            SOURCE_THUNDERSTORE,
+            Some("Ns-TsMod"),
+        )?;
+
+        // The index only reconcile never orphans Thunderstore rows
+        db.reconcile_orphaned_mods(&HashSet::new())?;
+        assert!(db.get_mod_details("IndexMod")?.orphaned);
+        assert!(!db.get_mod_details("TsMod")?.orphaned);
+
+        let titles: HashSet<String> = ["IndexMod".to_string()].into();
+        let mut ts_ids: HashSet<String> = HashSet::new();
+        let changed = db.reconcile_orphaned_mods_by_source(&titles, &ts_ids)?;
+        assert_eq!(changed.len(), 2);
+        assert!(!db.get_mod_details("IndexMod")?.orphaned);
+        assert!(db.get_mod_details("TsMod")?.orphaned);
+
+        ts_ids.insert("ns-tsmod".to_string());
+        let changed = db.reconcile_orphaned_mods_by_source(&titles, &ts_ids)?;
+        assert_eq!(changed, vec!["TsMod".to_string()]);
+        assert!(!db.get_mod_details("TsMod")?.orphaned);
+        Ok(())
+    }
+
+    #[test]
+    fn put_installed_mod_roundtrips_all_fields() -> Result<(), AppError> {
+        let db = create_memory_db()?;
+        let record = InstalledMod {
+            name: "TsMod".into(),
+            path: "/p/ts".into(),
+            dependencies: vec!["Steamodded".into()],
+            current_version: Some("1.2.3".into()),
+            orphaned: true,
+            source: SOURCE_THUNDERSTORE.into(),
+            source_id: Some("Ns-TsMod".into()),
+            installed_at: Some(42),
+        };
+        db.put_installed_mod(&record)?;
+        let row = db.get_mod_details("TsMod")?;
+        assert!(row.orphaned);
+        assert_eq!(row.source_id.as_deref(), Some("Ns-TsMod"));
+        assert_eq!(row.installed_at, Some(42));
         Ok(())
     }
 }
