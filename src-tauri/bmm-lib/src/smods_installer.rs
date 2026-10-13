@@ -127,6 +127,98 @@ pub fn find_steamodded_dirs(mods_dir: &Path) -> Vec<PathBuf> {
     found
 }
 
+/// Patch number Thunderstore uses for the one off `1531zeebee` beta tag
+const ZEEBEE_PATCH: u32 = 999_999;
+
+/// Parses any Steamodded version spelling into a comparable `(major, minor, patch)`
+///
+/// - GitHub tags `1.0.0-beta-1814a`, `1.0.0-beta-0827`, `1.0.0-beta-1531zeebee`
+/// - `version.lua` values such as `1.0.0~BETA-1016c`
+/// - Thunderstore versions `1.1814.0`, plain `0.9.8` and `26.1002.0`
+///
+/// Betas map to `(1, MMDD, letter index)` exactly like Thunderstore numbers them.
+/// Commit hashes, branch names and other text give None
+pub fn parse_smods_version(version: &str) -> Option<(u32, u32, u32)> {
+    let v = version.trim();
+    let v = v.strip_prefix(['v', 'V']).unwrap_or(v);
+    let lower = v.to_ascii_lowercase();
+
+    if let Some(rest) = lower
+        .strip_prefix("1.0.0-")
+        .or_else(|| lower.strip_prefix("1.0.0~"))
+    {
+        let rest = rest
+            .strip_prefix("beta-")
+            .or_else(|| rest.strip_prefix("alpha-"))?;
+        let digits_end = rest
+            .find(|c: char| !c.is_ascii_digit())
+            .unwrap_or(rest.len());
+        if digits_end == 0 {
+            return None;
+        }
+        let build: u32 = rest[..digits_end].parse().ok()?;
+        let suffix: String = rest[digits_end..]
+            .chars()
+            .take_while(|c| c.is_ascii_alphabetic())
+            .collect();
+        let patch = match suffix.as_str() {
+            "" => 0,
+            "zeebee" => ZEEBEE_PATCH,
+            s if s.len() == 1 => u32::from(s.as_bytes()[0] - b'a'),
+            _ => return None,
+        };
+        return Some((1, build, patch));
+    }
+
+    let core = lower.split(['-', '+', '~']).next()?;
+    let mut parts = core.split('.');
+    let major = parts.next()?.parse().ok()?;
+    let minor = parts.next()?.parse().ok()?;
+    let patch = parts.next().map_or(Some(0), |p| p.parse().ok())?;
+    if parts.next().is_some() {
+        return None;
+    }
+    Some((major, minor, patch))
+}
+
+/// Maps a Thunderstore Steamodded version to its GitHub release tag:
+/// `1.1814.0` to `1.0.0-beta-1814a`, `1.1606.1` to `1.0.0-beta-1606b`,
+/// `1.1531.999999` to `1.0.0-beta-1531zeebee`, while `0.9.8` and `26.x`
+/// releases use the same string for both
+pub fn ts_version_to_tag(ts_version: &str) -> Option<String> {
+    let v = ts_version.trim();
+    let mut parts = v.split('.');
+    let (major, minor, patch): (u32, u32, u32) = (
+        parts.next()?.parse().ok()?,
+        parts.next()?.parse().ok()?,
+        parts.next()?.parse().ok()?,
+    );
+    if parts.next().is_some() {
+        return None;
+    }
+    // Betas were published as 1.<MMDD>.<letter index>
+    if major == 1 && minor >= 100 {
+        let letter = match patch {
+            ZEEBEE_PATCH => "zeebee".to_string(),
+            0..26 => char::from(b'a' + patch as u8).to_string(),
+            _ => return None,
+        };
+        return Some(format!("1.0.0-beta-{minor:04}{letter}"));
+    }
+    Some(v.to_string())
+}
+
+/// Whether an installed Steamodded version meets a minimum given in any
+/// spelling [`parse_smods_version`] understands, like a Thunderstore
+/// `Steamodded-Steamodded-1.1814.0` dependency. An unknown installed version
+/// (a commit hash, `newest`) never satisfies, an unparseable minimum always does
+pub fn satisfies_min(installed: &str, min: &str) -> bool {
+    let Some(installed) = parse_smods_version(installed) else {
+        return false;
+    };
+    parse_smods_version(min).is_none_or(|min| installed >= min)
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 struct ReleaseAsset {
     name: String,
@@ -449,6 +541,66 @@ impl ModInstaller {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ts_version_to_tag_maps_every_thunderstore_release() {
+        // Every Steamodded-Steamodded version on Thunderstore next to its GitHub tag
+        let cases = [
+            ("26.1002.0", "26.1002.0"),
+            ("26.829.0", "26.829.0"),
+            ("1.1814.0", "1.0.0-beta-1814a"),
+            ("1.1620.0", "1.0.0-beta-1620a"),
+            ("1.1606.1", "1.0.0-beta-1606b"),
+            ("1.1531.999999", "1.0.0-beta-1531zeebee"),
+            ("1.1503.0", "1.0.0-beta-1503a"),
+            ("1.1501.0", "1.0.0-beta-1501a"),
+            ("1.1224.0", "1.0.0-beta-1224a"),
+            ("1.1221.0", "1.0.0-beta-1221a"),
+            ("1.1016.2", "1.0.0-beta-1016c"),
+            ("1.827.2", "1.0.0-beta-0827c"),
+            ("1.711.0", "1.0.0-beta-0711a"),
+            ("1.614.0", "1.0.0-beta-0614a"),
+            ("1.530.1", "1.0.0-beta-0530b"),
+            ("1.509.2", "1.0.0-beta-0509c"),
+            ("1.506.0", "1.0.0-beta-0506a"),
+            ("1.323.1", "1.0.0-beta-0323b"),
+            ("1.312.1", "1.0.0-beta-0312b"),
+            ("1.305.2", "1.0.0-beta-0305c"),
+            ("1.301.0", "1.0.0-beta-0301a"),
+            ("0.9.8", "0.9.8"),
+        ];
+        for (ts, tag) in cases {
+            assert_eq!(ts_version_to_tag(ts).as_deref(), Some(tag), "{ts}");
+            assert_eq!(parse_smods_version(ts), parse_smods_version(tag), "{ts}");
+        }
+        assert_eq!(ts_version_to_tag("1.1814.99"), None);
+        assert_eq!(ts_version_to_tag("latest"), None);
+    }
+
+    #[test]
+    fn parse_smods_version_understands_all_spellings() {
+        assert_eq!(parse_smods_version("1.0.0~BETA-1016c"), Some((1, 1016, 2)));
+        assert_eq!(parse_smods_version("v1.0.0-beta-1814a"), Some((1, 1814, 0)));
+        assert_eq!(parse_smods_version("1.0.0-beta-0827"), Some((1, 827, 0)));
+        assert_eq!(parse_smods_version("26.1002.0"), Some((26, 1002, 0)));
+        assert_eq!(parse_smods_version("0.9.8"), Some((0, 9, 8)));
+        assert_eq!(parse_smods_version("d3c022d"), None);
+        assert_eq!(parse_smods_version("newest"), None);
+        assert_eq!(parse_smods_version(""), None);
+    }
+
+    #[test]
+    fn satisfies_min_compares_across_version_schemes() {
+        assert!(satisfies_min("26.1002.0", "1.1814.0"));
+        assert!(satisfies_min("1.0.0-beta-1814a", "1.1814.0"));
+        assert!(satisfies_min("1.0.0~BETA-1814a", "1.1620.0"));
+        assert!(!satisfies_min("1.0.0-beta-1620a", "1.1814.0"));
+        assert!(!satisfies_min("1.0.0-beta-1606b", "1.1620.0"));
+        assert!(satisfies_min("1.0.0-beta-1606b", "1.1606.1"));
+        assert!(!satisfies_min("0.9.8", "1.301.0"));
+        assert!(!satisfies_min("d3c022d", "1.1814.0"));
+        assert!(satisfies_min("1.0.0-beta-1814a", "garbage"));
+    }
 
     #[test]
     fn test_mod_type_display() {

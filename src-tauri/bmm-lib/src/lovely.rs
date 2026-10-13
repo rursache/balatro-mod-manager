@@ -149,6 +149,16 @@ pub fn supports_vanilla_flag(version: Option<&str>) -> bool {
         .is_some_and(|v| v >= (0, 9, 0))
 }
 
+/// Whether the installed Lovely version meets a minimum such as the one from a
+/// Thunderstore `Thunderstore-lovely-0.8.0` dependency. An unknown installed
+/// version never satisfies, an unparseable minimum is satisfied by any install
+pub fn installed_version_satisfies(installed: Option<&str>, min: &str) -> bool {
+    let Some(installed) = installed.and_then(parse_lovely_version) else {
+        return false;
+    };
+    parse_lovely_version(min).is_none_or(|min| installed >= min)
+}
+
 /// Extracts the version from the `/releases/latest` redirect, e.g. ".../tag/v0.10.0" -> "0.10.0"
 fn version_from_latest_redirect(is_redirect: bool, location: &str) -> Option<String> {
     if !is_redirect {
@@ -1416,6 +1426,16 @@ mod tests {
         assert!(supports_vanilla_flag(Some("1.0.0")));
         assert!(!supports_vanilla_flag(Some("garbage")));
         assert!(!supports_vanilla_flag(None));
+    }
+
+    #[test]
+    fn installed_version_satisfies_minimum() {
+        assert!(installed_version_satisfies(Some("0.10.0"), "0.8.0"));
+        assert!(installed_version_satisfies(Some("v0.8.0"), "0.8.0"));
+        assert!(!installed_version_satisfies(Some("0.7.1"), "0.8.0"));
+        assert!(installed_version_satisfies(Some("0.9.0"), "not-a-version"));
+        assert!(!installed_version_satisfies(None, "0.1.0"));
+        assert!(!installed_version_satisfies(Some("garbage"), "0.1.0"));
     }
 
     #[test]
