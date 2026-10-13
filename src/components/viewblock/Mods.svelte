@@ -106,6 +106,7 @@
   import { openExternal } from "$lib/opener";
   import { mapWithConcurrency } from "../../utils/concurrency";
   import { fuzzyFilter } from "../../utils/fuzzy";
+  import { recordedVersion } from "../../utils/helpers";
   import { sortMods } from "../../utils/sortMods";
   import { mapCategories } from "../../utils/categories";
   import {
@@ -1120,7 +1121,7 @@
         name: mod.title,
         path: installedPath,
         dependencies: mod.requires_steamodded ? ["Steamodded"] : [],
-        currentVersion: mod.version || "",
+        currentVersion: recordedVersion(mod.title, url, mod.version),
       });
 
       installationStatus.update((s) => ({ ...s, [mod.title]: true }));

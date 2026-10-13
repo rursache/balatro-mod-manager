@@ -29,3 +29,22 @@ export function truncateText(text: string, maxLength: number = 65): string {
   if (text.length <= maxLength) return text;
   return text.slice(0, maxLength).trim() + "...";
 }
+
+/** Release tag of a GitHub tag archive URL, e.g. `.../archive/refs/tags/26.1002.0.zip` */
+export function tagFromArchiveUrl(url: string): string | null {
+  const m = /\/archive\/refs\/tags\/([^/]+?)\.(?:zip|tar\.gz)$/i.exec(url);
+  return m ? decodeURIComponent(m[1]) : null;
+}
+
+/** Version to record for an install: Steamodded uses the tag actually downloaded */
+export function recordedVersion(
+  title: string,
+  url: string,
+  catalogVersion?: string | null,
+): string {
+  if (title.toLowerCase() === "steamodded") {
+    const tag = tagFromArchiveUrl(url);
+    if (tag) return tag;
+  }
+  return catalogVersion || "";
+}

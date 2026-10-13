@@ -259,7 +259,10 @@ pub fn load_versions_cache(mod_type: &str) -> Result<Option<Vec<String>>, AppErr
         return Ok(None);
     }
 
-    Ok(Some(cache.versions))
+    // Caches written before tags were ordered numerically are re-sorted here
+    let mut versions = cache.versions;
+    versions.sort_by(|a, b| crate::smods_installer::compare_release_tags(b, a));
+    Ok(Some(versions))
 }
 
 #[derive(Serialize, Deserialize)]

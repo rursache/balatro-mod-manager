@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { stripMarkdown, truncateText } from "./helpers";
+import {
+  recordedVersion,
+  stripMarkdown,
+  tagFromArchiveUrl,
+  truncateText,
+} from "./helpers";
 
 describe("stripMarkdown", () => {
   describe("basic markdown removal", () => {
@@ -145,5 +150,24 @@ describe("truncateText", () => {
 
   it("should return empty string for empty input", () => {
     expect(truncateText("")).toBe("");
+  });
+});
+
+describe("recordedVersion", () => {
+  const url =
+    "https://github.com/Steamodded/smods/archive/refs/tags/26.829.0.zip";
+
+  it("reads the tag from a tag archive URL", () => {
+    expect(tagFromArchiveUrl(url)).toBe("26.829.0");
+    expect(tagFromArchiveUrl("https://example.com/mod.zip")).toBeNull();
+  });
+
+  it("records the downloaded Steamodded tag instead of the catalog version", () => {
+    expect(recordedVersion("Steamodded", url, "26.1002.0")).toBe("26.829.0");
+  });
+
+  it("keeps the catalog version for other mods", () => {
+    expect(recordedVersion("Saturn", url, "v1.2")).toBe("v1.2");
+    expect(recordedVersion("Saturn", url, undefined)).toBe("");
   });
 });

@@ -219,6 +219,37 @@ pub fn satisfies_min(installed: &str, min: &str) -> bool {
     parse_smods_version(min).is_none_or(|min| installed >= min)
 }
 
+/// Orders release tags like `26.1002.0`, `26.829.0` and `1.0.0-beta-1814a`
+/// by comparing digit runs as numbers, so `26.1002.0` sorts above `26.829.0`
+pub fn compare_release_tags(a: &str, b: &str) -> std::cmp::Ordering {
+    fn tokens(s: &str) -> Vec<(bool, &str)> {
+        let mut out = Vec::new();
+        let mut start = 0;
+        let bytes = s.as_bytes();
+        for i in 1..=bytes.len() {
+            if i == bytes.len() || bytes[i].is_ascii_digit() != bytes[start].is_ascii_digit() {
+                out.push((bytes[start].is_ascii_digit(), &s[start..i]));
+                start = i;
+            }
+        }
+        out
+    }
+    let (ta, tb) = (tokens(a.trim()), tokens(b.trim()));
+    for ((da, xa), (db, xb)) in ta.iter().zip(tb.iter()) {
+        let ord = match (da, db) {
+            (true, true) => {
+                let (na, nb) = (xa.trim_start_matches('0'), xb.trim_start_matches('0'));
+                na.len().cmp(&nb.len()).then_with(|| na.cmp(nb))
+            }
+            _ => xa.cmp(xb),
+        };
+        if ord != std::cmp::Ordering::Equal {
+            return ord;
+        }
+    }
+    ta.len().cmp(&tb.len())
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 struct ReleaseAsset {
     name: String,
@@ -357,7 +388,7 @@ impl ModInstaller {
             .map(|r| r.tag_name)
             .collect();
 
-        versions.sort_by(|a, b| b.cmp(a));
+        versions.sort_by(|a, b| compare_release_tags(b, a));
 
         Ok(versions)
     }
@@ -616,21 +647,26 @@ mod tests {
 
     #[test]
     fn test_version_sorting_descending() {
-        // Simulates the sorting logic used in get_available_versions
-        let mut versions = vec![
-            "1.0.0".to_string(),
-            "2.0.0".to_string(),
-            "1.5.0".to_string(),
-            "0.9.0".to_string(),
-        ];
-        versions.sort_by(|a, b| b.cmp(a));
+        let mut versions: Vec<String> = [
+            "26.829.0",
+            "1.0.0-beta-1814a",
+            "26.1002.0",
+            "1.0.0-beta-1620a",
+            "0.9.8",
+            "26.1002.10",
+        ]
+        .map(String::from)
+        .to_vec();
+        versions.sort_by(|a, b| compare_release_tags(b, a));
         assert_eq!(
             versions,
-            vec![
-                "2.0.0".to_string(),
-                "1.5.0".to_string(),
-                "1.0.0".to_string(),
-                "0.9.0".to_string()
+            [
+                "26.1002.10",
+                "26.1002.0",
+                "26.829.0",
+                "1.0.0-beta-1814a",
+                "1.0.0-beta-1620a",
+                "0.9.8"
             ]
         );
     }

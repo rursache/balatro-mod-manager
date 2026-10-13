@@ -936,10 +936,12 @@ pub async fn get_talisman_versions() -> Result<Vec<String>, String> {
 
 #[tauri::command]
 pub async fn get_latest_steamodded_release() -> Result<String, String> {
+    // Older caches were sorted as plain text, so pick the newest tag explicitly
     if let Ok(Some(versions)) = cache::load_versions_cache("steamodded")
-        && !versions.is_empty()
+        && let Some(version) = versions
+            .iter()
+            .max_by(|a, b| bmm_lib::smods_installer::compare_release_tags(a, b))
     {
-        let version = &versions[0];
         return Ok(format!(
             "https://github.com/Steamodded/smods/archive/refs/tags/{version}.zip"
         ));

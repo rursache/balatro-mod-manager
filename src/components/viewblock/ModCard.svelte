@@ -19,7 +19,7 @@
   } from "../../stores/modStore";
   import { descriptionsStore } from "../../stores/descriptions";
   import { openCollectionPicker } from "../../stores/collections";
-  import { stripMarkdown } from "../../utils/helpers";
+  import { recordedVersion, stripMarkdown } from "../../utils/helpers";
   import { invoke } from "@tauri-apps/api/core";
   import { lovelyPopupStore } from "../../stores/modStore";
   import { forceRefreshCache } from "../../stores/modCache";
@@ -304,7 +304,7 @@
         name: mod.title,
         path: installedPath,
         dependencies: mod.requires_steamodded ? ["Steamodded"] : [],
-        currentVersion: mod.version || "",
+        currentVersion: recordedVersion(mod.title, url, mod.version),
       });
 
       installationStatus.update((s) => ({ ...s, [mod.title]: true }));
