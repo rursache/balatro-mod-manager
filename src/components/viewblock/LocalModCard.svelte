@@ -773,25 +773,31 @@
     width: 24px;
     height: 24px;
     border-radius: 4px;
-    border: 2px solid white;
-    background: rgba(0, 0, 0, 0.5);
+    border: 2px solid var(--ui-mod-panel-border);
+    /* Opaque so the thumbnail under the corner never shows through */
+    background: #262626;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
     cursor: pointer;
     z-index: 10;
     display: flex;
     align-items: center;
     justify-content: center;
-    transition: all 0.15s ease;
+    transition:
+      background 0.15s ease,
+      border-color 0.15s ease;
     padding: 0;
   }
 
   .select-checkbox:hover {
-    border-color: white;
-    background: rgba(0, 0, 0, 0.7);
+    background: #3a3a3a;
   }
 
   .select-checkbox.checked {
-    background: var(--ui-success);
-    border-color: white;
+    background: var(--ui-success-strong);
+  }
+
+  .select-checkbox.checked:hover {
+    background: var(--ui-success-strong-hover);
   }
 
   .mod-card.selected {
