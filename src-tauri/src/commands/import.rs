@@ -115,44 +115,84 @@ pub async fn process_mod_archive(
     Ok(mod_dir.to_string_lossy().to_string())
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ArchiveKind {
+    Zip,
+    Tar,
+    TarGz,
+    Rar,
+    SevenZ,
+}
+
+const ARCHIVE_EXTENSIONS: &[(&str, ArchiveKind)] = &[
+    (".tar.gz", ArchiveKind::TarGz),
+    (".tgz", ArchiveKind::TarGz),
+    (".tar", ArchiveKind::Tar),
+    (".zip", ArchiveKind::Zip),
+    (".rar", ArchiveKind::Rar),
+    (".7z", ArchiveKind::SevenZ),
+];
+
+fn parse_archive_name(filename: &str) -> Result<(String, ArchiveKind), String> {
+    let base = filename.rsplit(['/', '\\']).next().unwrap_or_default();
+    let (stem, kind) = ARCHIVE_EXTENSIONS
+        .iter()
+        .find_map(|(ext, kind)| base.strip_suffix(ext).map(|stem| (stem, *kind)))
+        .ok_or_else(|| {
+            "Unsupported file format. Only ZIP, TAR, TAR.GZ, RAR, and 7Z are supported.".to_string()
+        })?;
+    if !is_valid_mod_dir_name(stem) {
+        return Err(format!("Invalid mod archive name: {filename}"));
+    }
+    Ok((stem.to_string(), kind))
+}
+
+fn is_valid_mod_dir_name(name: &str) -> bool {
+    if name.contains(['/', '\\', ':', '\0']) {
+        return false;
+    }
+    let mut components = Path::new(name).components();
+    matches!(
+        (components.next(), components.next()),
+        (Some(Component::Normal(part)), None) if part == name
+    )
+}
+
+// The returned path is always a direct child of mods_dir, so it is safe to replace
+fn mod_dir_in(mods_dir: &Path, name: &str) -> Result<PathBuf, String> {
+    let mod_dir = mods_dir.join(name);
+    if !is_valid_mod_dir_name(name) || mod_dir.parent() != Some(mods_dir) {
+        return Err(format!(
+            "Refusing to use mod directory outside of Mods: {name}"
+        ));
+    }
+    Ok(mod_dir)
+}
+
 fn extract_archive_from_reader<R: Read + Seek>(
     filename: &str,
     reader: R,
     source_path: Option<&Path>,
-    mods_dir: &std::path::Path,
+    mods_dir: &Path,
 ) -> Result<PathBuf, String> {
-    let mod_dir_name = filename
-        .trim_end_matches(".zip")
-        .trim_end_matches(".tar.gz")
-        .trim_end_matches(".tgz")
-        .trim_end_matches(".tar")
-        .trim_end_matches(".rar")
-        .trim_end_matches(".7z")
-        .to_string();
-    let mod_dir = mods_dir.join(&mod_dir_name);
+    let (mod_dir_name, kind) = parse_archive_name(filename)?;
+    let rar_missing_path = || "RAR archives require a file path".to_string();
+    if kind == ArchiveKind::Rar && source_path.is_none() {
+        return Err(rar_missing_path());
+    }
+    let mod_dir = mod_dir_in(mods_dir, &mod_dir_name)?;
 
-    if mod_dir.exists() {
+    if mod_dir.symlink_metadata().is_ok() {
         std::fs::remove_dir_all(&mod_dir)
             .map_err(|e| format!("Failed to remove existing mod directory: {e}"))?;
     }
 
-    if filename.ends_with(".zip") {
-        extract_zip(reader, &mod_dir)?;
-    } else if filename.ends_with(".rar") {
-        let source_path =
-            source_path.ok_or_else(|| "RAR archives require a file path".to_string())?;
-        extract_rar(source_path, &mod_dir)?;
-    } else if filename.ends_with(".7z") {
-        extract_7z(reader, &mod_dir)?;
-    } else if filename.ends_with(".tar") {
-        extract_tar(reader, &mod_dir)?;
-    } else if filename.ends_with(".tar.gz") || filename.ends_with(".tgz") {
-        extract_tar_gz(reader, &mod_dir)?;
-    } else {
-        return Err(
-            "Unsupported file format. Only ZIP, TAR, TAR.GZ, RAR, and 7Z are supported."
-                .to_string(),
-        );
+    match kind {
+        ArchiveKind::Zip => extract_zip(reader, &mod_dir)?,
+        ArchiveKind::Tar => extract_tar(reader, &mod_dir)?,
+        ArchiveKind::TarGz => extract_tar_gz(reader, &mod_dir)?,
+        ArchiveKind::Rar => extract_rar(source_path.ok_or_else(rar_missing_path)?, &mod_dir)?,
+        ArchiveKind::SevenZ => extract_7z(reader, &mod_dir)?,
     }
 
     Ok(mod_dir)
@@ -709,51 +749,112 @@ mod tests {
     }
 
     #[test]
-    fn test_mod_dir_name_from_zip() {
-        let filename = "TestMod.zip";
-        let mod_name = filename
-            .trim_end_matches(".zip")
-            .trim_end_matches(".tar.gz")
-            .trim_end_matches(".tgz")
-            .trim_end_matches(".tar")
-            .trim_end_matches(".rar");
-        assert_eq!(mod_name, "TestMod");
+    fn test_parse_archive_name() {
+        let cases = [
+            ("TestMod.zip", "TestMod", ArchiveKind::Zip),
+            ("TestMod.tar", "TestMod", ArchiveKind::Tar),
+            ("TestMod.tar.gz", "TestMod", ArchiveKind::TarGz),
+            ("TestMod.tgz", "TestMod", ArchiveKind::TarGz),
+            ("TestMod.rar", "TestMod", ArchiveKind::Rar),
+            ("TestMod.7z", "TestMod", ArchiveKind::SevenZ),
+            ("Test.Mod-1.2.zip", "Test.Mod-1.2", ArchiveKind::Zip),
+        ];
+        for (filename, name, kind) in cases {
+            assert_eq!(
+                parse_archive_name(filename).unwrap(),
+                (name.to_string(), kind),
+                "{filename}"
+            );
+        }
     }
 
     #[test]
-    fn test_mod_dir_name_from_tar_gz() {
-        let filename = "TestMod.tar.gz";
-        let mod_name = filename
-            .trim_end_matches(".zip")
-            .trim_end_matches(".tar.gz")
-            .trim_end_matches(".tgz")
-            .trim_end_matches(".tar")
-            .trim_end_matches(".rar");
-        assert_eq!(mod_name, "TestMod");
+    fn test_parse_archive_name_keeps_only_final_component() {
+        for filename in [
+            "../../x.zip",
+            "/x.zip",
+            "a/x.zip",
+            "..\\..\\x.zip",
+            "C:\\x.zip",
+        ] {
+            assert_eq!(parse_archive_name(filename).unwrap().0, "x", "{filename}");
+        }
     }
 
     #[test]
-    fn test_mod_dir_name_from_tgz() {
-        let filename = "TestMod.tgz";
-        let mod_name = filename
-            .trim_end_matches(".zip")
-            .trim_end_matches(".tar.gz")
-            .trim_end_matches(".tgz")
-            .trim_end_matches(".tar")
-            .trim_end_matches(".rar");
-        assert_eq!(mod_name, "TestMod");
+    fn test_parse_archive_name_rejects_unsafe_names() {
+        for filename in [
+            "", ".zip", "..zip", "...zip", "../..", "a/..", "a/.zip", "C:x.zip", "x\0y.zip",
+        ] {
+            assert!(parse_archive_name(filename).is_err(), "{filename:?}");
+        }
     }
 
     #[test]
-    fn test_mod_dir_name_from_rar() {
-        let filename = "TestMod.rar";
-        let mod_name = filename
-            .trim_end_matches(".zip")
-            .trim_end_matches(".tar.gz")
-            .trim_end_matches(".tgz")
-            .trim_end_matches(".tar")
-            .trim_end_matches(".rar");
-        assert_eq!(mod_name, "TestMod");
+    fn test_mod_dir_in_requires_direct_child() {
+        let mods_dir = Path::new("/mods");
+        assert_eq!(mod_dir_in(mods_dir, "Mod").unwrap(), mods_dir.join("Mod"));
+        for name in ["", ".", "..", "a/b", "/abs", "a\\b", "x\0"] {
+            assert!(mod_dir_in(mods_dir, name).is_err(), "{name:?}");
+        }
+    }
+
+    fn zip_with_init() -> Vec<u8> {
+        let mut zip_data = Vec::new();
+        {
+            let mut zip = zip::ZipWriter::new(Cursor::new(&mut zip_data));
+            let options = zip::write::SimpleFileOptions::default();
+            zip.start_file("init.lua", options).unwrap();
+            zip.write_all(b"-- mod").unwrap();
+            zip.finish().unwrap();
+        }
+        zip_data
+    }
+
+    #[test]
+    fn test_extract_archive_rejects_malicious_filenames() {
+        let temp_dir = TempDir::new().unwrap();
+        let mods_dir = temp_dir.path().join("a").join("b").join("Mods");
+        let sentinels = [
+            temp_dir.path().join("a").join("x").join("keep.txt"),
+            mods_dir.join("Other").join("keep.txt"),
+        ];
+        for sentinel in &sentinels {
+            std::fs::create_dir_all(sentinel.parent().unwrap()).unwrap();
+            std::fs::write(sentinel, "keep").unwrap();
+        }
+
+        for filename in [
+            "../../x.zip",
+            "/abs.zip",
+            "a/b.zip",
+            "",
+            ".zip",
+            "..zip",
+            "../Other/.zip",
+        ] {
+            let result = extract_archive_from_reader(
+                filename,
+                Cursor::new(zip_with_init()),
+                None,
+                &mods_dir,
+            );
+            if let Ok(mod_dir) = result {
+                assert_eq!(mod_dir.parent(), Some(mods_dir.as_path()), "{filename:?}");
+                assert!(mod_dir.join("init.lua").exists(), "{filename:?}");
+            }
+            for sentinel in &sentinels {
+                assert!(
+                    sentinel.exists(),
+                    "{filename:?} removed {}",
+                    sentinel.display()
+                );
+            }
+        }
+
+        assert!(mods_dir.join("x").join("init.lua").exists());
+        assert!(mods_dir.join("abs").join("init.lua").exists());
+        assert!(mods_dir.join("b").join("init.lua").exists());
     }
 
     #[test]
