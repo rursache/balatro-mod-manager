@@ -275,27 +275,27 @@
 }
 
 :where(
-    button,
-    a[href],
-    input,
-    select,
-    textarea,
-    [tabindex]:not([tabindex="-1"]),
-    [role="button"]
-  ):focus-visible {
+  button,
+  a[href],
+  input,
+  select,
+  textarea,
+  [tabindex]:not([tabindex="-1"]),
+  [role="button"]
+):focus-visible {
   outline: 3px solid var(--ui-focus-ring);
   outline-offset: 3px;
 }
 
 :where(
-    button,
-    a[href],
-    input,
-    select,
-    textarea,
-    [tabindex]:not([tabindex="-1"]),
-    [role="button"]
-  )[data-controller-focus="true"] {
+  button,
+  a[href],
+  input,
+  select,
+  textarea,
+  [tabindex]:not([tabindex="-1"]),
+  [role="button"]
+)[data-controller-focus="true"] {
   outline: 3px solid var(--ui-controller-focus) !important;
   outline-offset: 3px;
   box-shadow: 0 0 0 5px var(--ui-controller-focus-shadow);

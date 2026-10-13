@@ -182,7 +182,10 @@ export function handleControllerButtons(
     return true;
   }
 
-  if (pressedButtons.has(CONFIRM_BUTTON) && !previousButtons.has(CONFIRM_BUTTON)) {
+  if (
+    pressedButtons.has(CONFIRM_BUTTON) &&
+    !previousButtons.has(CONFIRM_BUTTON)
+  ) {
     handlers.onConfirm?.();
     return true;
   }
@@ -265,7 +268,8 @@ export function startControllerNavigation(
       if (direction !== heldDirection || now >= nextMoveAt) {
         moveControllerFocus(direction, root);
         nextMoveAt =
-          now + (direction === heldDirection ? repeatIntervalMs : repeatDelayMs);
+          now +
+          (direction === heldDirection ? repeatIntervalMs : repeatDelayMs);
         heldDirection = direction;
       }
     } else {

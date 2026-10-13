@@ -14,10 +14,7 @@
   import DepPrompt from "../components/DepPrompt.svelte";
   import { Window } from "@tauri-apps/api/window";
   // Initialize popup manager subscriptions
-  import {
-    hasActivePopup,
-    isPopupTransitioning,
-  } from "../stores/popupManager";
+  import { hasActivePopup, isPopupTransitioning } from "../stores/popupManager";
 
   import "../app.css";
   import UpdateAvailablePopup from "../components/UpdateAvailablePopup.svelte";
