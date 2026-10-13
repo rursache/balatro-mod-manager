@@ -1,4 +1,5 @@
 import { writable } from "svelte/store";
+import { ensureCatalogSchema } from "../utils/catalogSchema";
 
 export const descriptionsStore = writable<Record<string, string>>({});
 
@@ -72,6 +73,7 @@ export async function withDescriptionsPersistenceSuspended<T>(
 // Hydrate from localStorage (best-effort)
 if (typeof window !== "undefined") {
   try {
+    ensureCatalogSchema();
     const raw = window.localStorage.getItem(CACHE_KEY);
     if (raw) {
       const parsed = JSON.parse(raw);

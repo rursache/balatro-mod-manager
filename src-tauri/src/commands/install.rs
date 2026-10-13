@@ -19,7 +19,6 @@ use std::process::Command;
 use std::process::Stdio;
 use std::time::Duration;
 
-use crate::bmi::BmiClient;
 use crate::compat_helper;
 use crate::state::AppState;
 use crate::util::map_error;
@@ -1072,38 +1071,11 @@ pub async fn install_mod(
     let mut last_error: Option<String> = None;
     let mut delay = Duration::from_millis(500);
 
-    for attempt in 1..=INSTALL_MAX_RETRIES {
-        // Resolve BMI URL on each attempt (in case the download URL expires or changes)
-        let resolved_url = if let Some(id) = url.strip_prefix("bmi://") {
-            if id.trim().is_empty() {
-                return Err("BMI download missing mod id".to_string());
-            }
-            let client = BmiClient::new()?;
-            match client.post_download(id).await {
-                Ok(url) => url,
-                Err(e) => {
-                    // Check if it's a rate limit error
-                    if is_rate_limit_error(&e) && attempt < INSTALL_MAX_RETRIES {
-                        log::warn!(
-                            "Mod install rate limited (attempt {}/{}), retrying in {:?}",
-                            attempt,
-                            INSTALL_MAX_RETRIES,
-                            delay
-                        );
-                        last_error = Some(e);
-                        tokio::time::sleep(delay).await;
-                        delay = delay.saturating_mul(2);
-                        continue;
-                    }
-                    return Err(e);
-                }
-            }
-        } else {
-            url.clone()
-        };
+    let resolved_url = crate::mod_index::resolve_install_url(&url).await?;
 
+    for attempt in 1..=INSTALL_MAX_RETRIES {
         // Attempt to install the mod
-        match bmm_lib::installer::install_mod(resolved_url, folder_name_opt.clone()).await {
+        match bmm_lib::installer::install_mod(resolved_url.clone(), folder_name_opt.clone()).await {
             Ok(path) => {
                 sync_compat_helper_after_mod_change(&state).await;
                 return Ok(path);

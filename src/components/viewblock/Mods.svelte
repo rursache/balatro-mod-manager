@@ -98,6 +98,7 @@
   import { openExternal } from "$lib/opener";
   import { mapWithConcurrency } from "../../utils/concurrency";
   import { fuzzyFilter } from "../../utils/fuzzy";
+  import { sortMods } from "../../utils/sortMods";
 
   /** Max parallel mod-update invocations to keep the Tauri IPC queue healthy. */
   const UPDATE_ALL_CONCURRENCY = 6;
@@ -271,8 +272,6 @@
   let paginationIdleTimer: number | null = null;
   let hydrationTimer: number | null = null;
   let hydrationPending = false;
-  let downloadsRefreshTimer: number | null = null;
-  let downloadsRefreshing = false;
   let isLinux = false;
   let modsScrollContainer: HTMLDivElement | null = $state(null);
   let scrollIdleTimer: number | null = null;
@@ -502,41 +501,6 @@
     }
   }
 
-  async function refreshDownloadsLive() {
-    if (downloadsRefreshing) return;
-    downloadsRefreshing = true;
-    try {
-      const sort = get(currentSort);
-      if (
-        sort === SortOption.DownloadsAsc ||
-        sort === SortOption.DownloadsDesc
-      ) {
-        const items = await invoke<ArchiveModItem[]>("fetch_repo_mods", {
-          sort,
-        });
-        const mods = mapArchiveItems(items);
-        mergeIncomingMods(mods);
-        return;
-      }
-      const downloads = await invoke<
-        Record<string, { total: number; today?: number }>
-      >("fetch_repo_downloads", { sort });
-      modsStore.update((arr) =>
-        arr.map((m) => {
-          if (!m._dirName) return m;
-          const entry = downloads[m._dirName];
-          if (!entry) return m;
-          if (m.downloads_total === entry.total) return m;
-          return { ...m, downloads_total: entry.total };
-        }),
-      );
-    } catch (e) {
-      console.warn("downloads refresh failed", e);
-    } finally {
-      downloadsRefreshing = false;
-    }
-  }
-
   // Avoid forcing a refresh on every reactive pass; only fetch local mods here.
   // We refresh installed mods on category switch and after install/uninstall events.
   $effect(() => {
@@ -638,12 +602,6 @@
     dotInterval = setInterval(() => {
       loadingDots.update((n) => (n + 1) % 4);
     }, 500);
-
-    // Skip initial refreshDownloadsLive() - catalog load will handle it
-    // Only start the periodic refresh timer after initial load completes
-    downloadsRefreshTimer = window.setInterval(() => {
-      refreshDownloadsLive().catch(() => {});
-    }, 60000);
 
     if (browser) {
       const plat =
@@ -846,7 +804,6 @@
     // Return synchronous cleanup function
     return () => {
       clearInterval(dotInterval);
-      if (downloadsRefreshTimer) clearInterval(downloadsRefreshTimer);
       if (scrollIdleTimer) {
         clearTimeout(scrollIdleTimer);
         scrollIdleTimer = null;
@@ -1128,7 +1085,7 @@
     }
 
     try {
-      if (!url.startsWith("http") && !url.startsWith("bmi://")) {
+      if (!/^(https?|index|bmi):\/\//i.test(url)) {
         console.error("Invalid URL format:", url);
         throw new Error(`Invalid URL format: ${url}`);
       }
@@ -1289,7 +1246,6 @@
     folderName?: string;
     version?: string;
     "last-updated"?: number;
-    downloads?: { total: number; today?: number };
   }
 
   // Do not depend on cache for catalog; prefer fresh data + lazy UI
@@ -1359,7 +1315,6 @@
         version: item.meta.version,
         installed: false,
         last_updated: item.meta["last-updated"] ?? 0,
-        downloads_total: item.meta.downloads?.total,
         _dirName: item.dir_name,
       };
     });
@@ -1376,11 +1331,7 @@
       .map((item) => {
         const image = item.image?.trim() || "/images/cover.jpg";
         const hasThumb = !/\/images\/cover\.jpg$/i.test(image);
-        const cachedId =
-          item.id ||
-          (item.downloadURL?.startsWith("bmi://")
-            ? item.downloadURL.slice("bmi://".length)
-            : (item.folderName ?? undefined));
+        const cachedId = item.id || (item.folderName ?? undefined);
         return {
           id: cachedId,
           title: item.title,
@@ -1447,9 +1398,7 @@
   async function loadCatalogCore(options: CatalogLoadOptions): Promise<void> {
     const { showMessages, isForeground } = options;
 
-    const items = await invoke<ArchiveModItem[]>("fetch_repo_mods", {
-      sort: $currentSort,
-    });
+    const items = await invoke<ArchiveModItem[]>("fetch_repo_mods");
     clearCatalogRetry();
 
     if (isForeground && items.length === 0) {
@@ -2118,6 +2067,9 @@
     resources: Category.ResourcePacks,
     API: Category.API,
     api: Category.API,
+    // Newer schema category without its own tab yet
+    Extension: Category.API,
+    extension: Category.API,
   };
 
   function getRandomColorPair() {
@@ -2272,19 +2224,12 @@
     }
   });
 
-  function sortMods(mods: Mod[], _sortOption: SortOption): Mod[] {
-    // Sorting is provided by the server; preserve incoming order.
-    return mods;
-  }
-
   // Add sort handler
   const sortOptions = [
     { value: SortOption.NameAsc, label: "Name (A-Z)" },
     { value: SortOption.NameDesc, label: "Name (Z-A)" },
     { value: SortOption.LastUpdatedDesc, label: "Last Updated" },
     { value: SortOption.LastUpdatedAsc, label: "Oldest Updated" },
-    { value: SortOption.DownloadsDesc, label: "Downloads (Most)" },
-    { value: SortOption.DownloadsAsc, label: "Downloads (Least)" },
   ];
 
   function getCurrentSortLabel(): string {
@@ -2303,7 +2248,6 @@
       currentPage.set(1);
       startPage = 1;
     }
-    refreshCatalogInBackground(false).catch(() => {});
   }
 
   function handleClickOutsideSort(event: MouseEvent) {
@@ -2333,7 +2277,6 @@
       currentPage.set(1);
       startPage = 1;
     }
-    refreshCatalogInBackground(false).catch(() => {});
   }
 
   function handleCreateCollection() {
@@ -2482,9 +2425,7 @@
       let repoModsLoaded = false;
       const ensureRepoMods = async () => {
         if (repoModsLoaded) return;
-        const items = await invoke<ArchiveModItem[]>("fetch_repo_mods", {
-          sort: get(currentSort),
-        });
+        const items = await invoke<ArchiveModItem[]>("fetch_repo_mods");
         const mapped = mapArchiveItems(items);
         repoModsByNormalized.clear();
         repoModsById.clear();
@@ -2568,7 +2509,7 @@
       const ensureDownloadUrl = (m: Mod): Mod => {
         if (m.downloadURL && m.downloadURL.trim().length > 0) return m;
         if (m._dirName) {
-          return { ...m, downloadURL: `bmi://${m._dirName}` };
+          return { ...m, downloadURL: `index://${m._dirName}` };
         }
         return m;
       };

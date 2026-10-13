@@ -268,7 +268,7 @@
         }
       }
 
-      if (!url.startsWith("http") && !url.startsWith("bmi://")) {
+      if (!/^(https?|index|bmi):\/\//i.test(url)) {
         console.error("Invalid URL format:", url);
         throw new Error(`Invalid URL format: ${url}`);
       }

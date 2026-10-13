@@ -1,0 +1,74 @@
+import { describe, it, expect } from "vitest";
+import { sortMods } from "./sortMods";
+import { SortOption, type Mod } from "../stores/modStore";
+
+const mod = (title: string, last_updated = 0, dir?: string): Mod => ({
+  title,
+  description: "",
+  image: "",
+  categories: [],
+  colors: { color1: "", color2: "" },
+  requires_steamodded: false,
+  requires_talisman: false,
+  publisher: "",
+  repo: "",
+  downloadURL: "",
+  installed: false,
+  last_updated,
+  _dirName: dir,
+});
+
+const titles = (mods: Mod[]) => mods.map((m) => m.title);
+
+describe("sortMods", () => {
+  it("sorts by name case-insensitively with a dir name tiebreak", () => {
+    const input = [
+      mod("beta"),
+      mod("Alpha", 0, "b@alpha"),
+      mod("alpha", 0, "a@alpha"),
+    ];
+    const asc = sortMods(input, SortOption.NameAsc);
+    expect(asc.map((m) => m._dirName ?? m.title)).toEqual([
+      "a@alpha",
+      "b@alpha",
+      "beta",
+    ]);
+    expect(titles(sortMods(input, SortOption.NameDesc))).toEqual([
+      "beta",
+      "Alpha",
+      "alpha",
+    ]);
+  });
+
+  it("sorts by last updated and keeps unknown times last", () => {
+    const input = [mod("old", 10), mod("none"), mod("new", 30), mod("mid", 20)];
+    expect(titles(sortMods(input, SortOption.LastUpdatedDesc))).toEqual([
+      "new",
+      "mid",
+      "old",
+      "none",
+    ]);
+    expect(titles(sortMods(input, SortOption.LastUpdatedAsc))).toEqual([
+      "old",
+      "mid",
+      "new",
+      "none",
+    ]);
+  });
+
+  it("breaks update time ties by name", () => {
+    const input = [mod("b", 5), mod("a", 5), mod("d"), mod("c")];
+    expect(titles(sortMods(input, SortOption.LastUpdatedDesc))).toEqual([
+      "a",
+      "b",
+      "c",
+      "d",
+    ]);
+  });
+
+  it("does not mutate its input", () => {
+    const input = [mod("b"), mod("a")];
+    sortMods(input, SortOption.NameAsc);
+    expect(titles(input)).toEqual(["b", "a"]);
+  });
+});

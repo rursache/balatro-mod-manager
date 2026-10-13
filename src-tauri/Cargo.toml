@@ -30,7 +30,7 @@ tauri-plugin-fs = "2"
 log = "0.4.33"
 fix-path-env = { git = "https://github.com/tauri-apps/fix-path-env-rs" }
 tauri-utils = "2.9.3"
-reqwest = { version = "0.13", features = ["json", "stream"] }
+reqwest = { version = "0.13", features = ["json", "stream", "gzip"] }
 httpdate = "1.0.3"
 # chrono = "0.4.40"
 zip = { version = "8.6.0", default-features = false, features = ["deflate"] }

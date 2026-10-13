@@ -3,8 +3,7 @@ use std::sync::{Arc, Mutex};
 
 use reqwest::StatusCode;
 
-use crate::assets::{ensure_assets_dirs, safe_slug};
-use crate::lfs::{LfsError, resolve_lfs_pointer_bytes};
+use crate::assets::{THUMB_CACHE_TTL_SECS, ensure_assets_dirs, safe_slug};
 use tokio::sync::{Semaphore, mpsc};
 use tokio::time::{Duration, sleep};
 
@@ -28,8 +27,6 @@ pub struct ThumbnailManager {
     enqueued: Arc<Mutex<HashSet<String>>>,
 }
 
-const THUMB_CACHE_TTL_SECS: u64 = 60 * 60 * 24 * 7;
-
 /// Upper bound on the dedupe set. Exceeding this triggers a trim down to
 /// `ENQUEUED_TRIM_TO`, so memory stays O(1) even if a session enqueues
 /// many distinct titles.
@@ -43,16 +40,9 @@ impl ThumbnailManager {
         let (tx_low, mut rx_low) = mpsc::channel::<ThumbReq>(256);
         let enqueued: Arc<Mutex<HashSet<String>>> = Arc::new(Mutex::new(HashSet::new()));
 
-        // Limit concurrent downloads to avoid rate limits
-        // Using 12 concurrent downloads for faster thumbnail loading
-        let semaphore = Arc::new(Semaphore::new(12));
-        let client = reqwest::Client::builder()
-            .user_agent("balatro-mod-manager/1.0")
-            .timeout(Duration::from_secs(10))
-            // Accept invalid certs for direct IP connections (fallback mode)
-            .danger_accept_invalid_certs(true)
-            .build()
-            .expect("reqwest client");
+        // Index thumbnails are full size originals, keep the load on raw.githubusercontent.com modest
+        let semaphore = Arc::new(Semaphore::new(6));
+        let client = crate::mod_index::http_client().clone();
 
         // Spawn dispatcher task that prioritizes high-priority requests
         let enq_for_task = enqueued.clone();
@@ -108,8 +98,14 @@ impl ThumbnailManager {
                                 set.remove(&req.title);
                             }
                         }
-                        Err(Backoff::RetryAfter(delay)) => {
-                            // schedule retry after delay
+                        Err(backoff) => {
+                            let delay = match backoff {
+                                Backoff::RetryAfter(delay) => delay,
+                                Backoff::RetryWith(delay, url) => {
+                                    req.url = url;
+                                    delay
+                                }
+                            };
                             req.attempts = req.attempts.saturating_add(1);
                             if req.attempts > 3 {
                                 if let Ok(mut set) = enq_set.lock() {
@@ -217,6 +213,16 @@ impl Default for ThumbnailManager {
 /// Errors that indicate we should retry later with a delay
 enum Backoff {
     RetryAfter(Duration),
+    /// Retry against another URL, used to move from raw.githubusercontent.com to the mirror
+    RetryWith(Duration, String),
+}
+
+/// The mirror URL to use when raw.githubusercontent.com throttles or refuses a thumbnail
+fn mirror_on_throttle(status: StatusCode, url: &str) -> Option<String> {
+    if status != StatusCode::TOO_MANY_REQUESTS && status != StatusCode::FORBIDDEN {
+        return None;
+    }
+    crate::mod_index::mirror_for(url)
 }
 
 async fn fetch_and_store(
@@ -235,18 +241,19 @@ async fn fetch_and_store(
         Err(_) => return Err(Backoff::RetryAfter(jitter(Duration::from_secs(3)))),
     };
 
+    if let Some(mirror) = mirror_on_throttle(resp.status(), url) {
+        log::info!(
+            "Thumbnail throttled, retrying via mirror: title='{}'",
+            title
+        );
+        return Err(Backoff::RetryWith(jitter(Duration::from_secs(1)), mirror));
+    }
+
     match resp.status() {
         StatusCode::OK => {
             let bytes = match resp.bytes().await {
-                Ok(b) => b.to_vec(),
-                Err(_) => return Ok(false),
-            };
-            let bytes = match resolve_lfs_pointer_bytes(client, bytes).await {
-                Ok(resolved) => resolved,
-                Err(LfsError::Retryable(_)) => {
-                    return Err(Backoff::RetryAfter(jitter(Duration::from_secs(4))));
-                }
-                Err(_) => return Ok(false),
+                Ok(b) if !b.is_empty() => b,
+                _ => return Ok(false),
             };
             if write_thumbnail_async(title, &bytes).await.is_err() {
                 // Disk error; drop silently
@@ -518,10 +525,23 @@ mod tests {
     // ==================== THUMB_CACHE_TTL_SECS constant test ====================
 
     #[test]
-    fn test_thumb_cache_ttl_is_7_days() {
-        // 7 days in seconds
-        let expected = 60 * 60 * 24 * 7;
-        assert_eq!(THUMB_CACHE_TTL_SECS, expected);
+    fn test_thumb_cache_ttl_is_30_days() {
+        assert_eq!(THUMB_CACHE_TTL_SECS, 60 * 60 * 24 * 30);
+    }
+
+    #[test]
+    fn test_mirror_on_throttle_only_for_raw_index_urls() {
+        let raw = crate::mod_index::raw_url("abc", "mods/A@B/thumbnail.jpg");
+        assert_eq!(
+            mirror_on_throttle(StatusCode::TOO_MANY_REQUESTS, &raw),
+            crate::mod_index::mirror_for(&raw)
+        );
+        assert!(mirror_on_throttle(StatusCode::FORBIDDEN, &raw).is_some());
+        assert_eq!(mirror_on_throttle(StatusCode::NOT_FOUND, &raw), None);
+        assert_eq!(
+            mirror_on_throttle(StatusCode::TOO_MANY_REQUESTS, "https://example.com/a.jpg"),
+            None
+        );
     }
 
     // ==================== ThumbReq tests ====================
@@ -561,6 +581,7 @@ mod tests {
         let backoff = Backoff::RetryAfter(Duration::from_secs(5));
         match backoff {
             Backoff::RetryAfter(d) => assert_eq!(d, Duration::from_secs(5)),
+            Backoff::RetryWith(..) => unreachable!(),
         }
     }
 }

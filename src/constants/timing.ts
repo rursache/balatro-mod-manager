@@ -32,9 +32,6 @@ export const CATALOG_RETRY_MAX_DELAY_MS = 60000;
 /** Jitter range for catalog retry to avoid thundering herd (ms) */
 export const CATALOG_RETRY_JITTER_MS = 1000;
 
-/** Interval for refreshing download counts (ms) */
-export const DOWNLOADS_REFRESH_INTERVAL_MS = 60000;
-
 // =============================================================================
 // UI Timers
 // =============================================================================

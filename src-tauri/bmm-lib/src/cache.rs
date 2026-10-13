@@ -26,6 +26,8 @@ use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const CACHE_DURATION: u64 = 15 * 60; // 15 minutes in seconds
+/// Bumped to 2 when the catalog moved off the BMI server, so caches holding `bmi://` URLs are dropped
+const MODS_CACHE_FORMAT: u32 = 2;
 
 fn flatpak_cache_path() -> Option<PathBuf> {
     dirs::home_dir().map(|home| {
@@ -310,21 +312,7 @@ pub fn save_cache(mods: &[Mod]) -> Result<(), AppError> {
         .map_err(|e| AppError::SystemTime(e.to_string()))?
         .as_secs();
 
-    let cache = ModCache {
-        header: CacheHeader {
-            version: 1,
-            timestamp,
-        },
-        mods: mods.to_vec(),
-    };
-
-    // Use bincode 2.0 for serialization
-    let config = bincode::config::standard();
-    let encoded =
-        bincode::serde::encode_to_vec(&cache, config).map_err(|e| AppError::Serialization {
-            format: "bincode".into(),
-            source: e.to_string(),
-        })?;
+    let encoded = encode_mod_cache(mods, MODS_CACHE_FORMAT, timestamp)?;
 
     encoder
         .write_all(&encoded)
@@ -371,22 +359,32 @@ pub fn load_cache() -> Result<Option<(Vec<Mod>, u64)>, AppError> {
         });
     }
 
-    // Deserialize using bincode 2.0
-    let config = bincode::config::standard();
-    let (cache, _): (ModCache, _) = match bincode::serde::decode_from_slice(&decompressed, config) {
-        Ok(result) => result,
-        Err(_) => return Ok(None),
-    };
-
-    if cache.header.version != 1 {
-        return Ok(None);
-    }
-
     // Keep using stale cache data; callers can decide if they want to refresh based on timestamp.
     // This prevents losing catalog lookups when offline or when a different install (e.g., Flatpak)
     // owns the freshest cache.
+    Ok(decode_mod_cache(&decompressed))
+}
 
-    Ok(Some((cache.mods, cache.header.timestamp)))
+fn encode_mod_cache(mods: &[Mod], version: u32, timestamp: u64) -> Result<Vec<u8>, AppError> {
+    let cache = ModCache {
+        header: CacheHeader { version, timestamp },
+        mods: mods.to_vec(),
+    };
+    bincode::serde::encode_to_vec(&cache, bincode::config::standard()).map_err(|e| {
+        AppError::Serialization {
+            format: "bincode".into(),
+            source: e.to_string(),
+        }
+    })
+}
+
+fn decode_mod_cache(bytes: &[u8]) -> Option<(Vec<Mod>, u64)> {
+    let (cache, _): (ModCache, _) =
+        bincode::serde::decode_from_slice(bytes, bincode::config::standard()).ok()?;
+    if cache.header.version != MODS_CACHE_FORMAT {
+        return None;
+    }
+    Some((cache.mods, cache.header.timestamp))
 }
 
 #[cfg(test)]
@@ -425,6 +423,47 @@ mod tests {
         }
 
         result
+    }
+
+    fn sample_mod(url: &str) -> Mod {
+        Mod {
+            title: "Sample".into(),
+            description: String::new(),
+            image: String::new(),
+            categories: vec![Category::API],
+            colors: ColorPair {
+                color1: "#fff".into(),
+                color2: "#000".into(),
+            },
+            installed: false,
+            requires_steamodded: false,
+            requires_talisman: false,
+            publisher: "x".into(),
+            repo: String::new(),
+            download_url: url.into(),
+            folderName: None,
+            version: None,
+        }
+    }
+
+    #[test]
+    fn load_cache_rejects_v1_header() {
+        let bytes = encode_mod_cache(&[sample_mod("bmi://sample")], 1, 10).unwrap();
+        assert!(decode_mod_cache(&bytes).is_none());
+    }
+
+    #[test]
+    fn mod_cache_roundtrip_at_current_format() {
+        let bytes =
+            encode_mod_cache(&[sample_mod("https://e.com/a.zip")], MODS_CACHE_FORMAT, 10).unwrap();
+        let (mods, ts) = decode_mod_cache(&bytes).expect("decodes");
+        assert_eq!(ts, 10);
+        assert_eq!(mods[0].download_url, "https://e.com/a.zip");
+    }
+
+    #[test]
+    fn decode_mod_cache_rejects_garbage() {
+        assert!(decode_mod_cache(b"nope").is_none());
     }
 
     #[test]

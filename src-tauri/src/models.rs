@@ -18,7 +18,8 @@ pub struct ModsChangedEvent {
     pub full_refresh: bool,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+/// A mod's `meta.json` from the mod index
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub struct ModMeta {
     #[serde(rename = "requires-steamodded", alias = "requires_steamodded", default)]
     pub requires_steamodded: bool,
@@ -36,69 +37,34 @@ pub struct ModMeta {
     pub download_url: Option<String>,
     #[serde(rename = "folderName", default)]
     pub folder_name: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "string_or_number")]
     pub version: String,
     #[serde(rename = "automatic-version-check", default)]
     pub automatic_version_check: bool,
     #[serde(rename = "last-updated", default)]
     pub last_updated: u64,
+}
+
+/// One catalog entry as consumed by the frontend
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ArchiveModItem {
+    pub dir_name: String,
+    pub meta: ModMeta,
+    pub description: String,
+    pub image_url: String,
     #[serde(default)]
-    pub downloads: Option<ModDownloads>,
+    pub has_thumbnail: bool,
 }
 
-#[derive(Clone, Debug, Serialize, Default)]
-pub struct ModDownloads {
-    pub total: u64,
-    pub today: u64,
-}
-
-impl<'de> Deserialize<'de> for ModDownloads {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let value = serde_json::Value::deserialize(deserializer)?;
-        Ok(parse_downloads_value(&value))
-    }
-}
-
-fn parse_downloads_value(value: &serde_json::Value) -> ModDownloads {
-    match value {
-        serde_json::Value::Number(num) => ModDownloads {
-            total: num.as_u64().unwrap_or(0),
-            today: 0,
-        },
-        serde_json::Value::String(s) => ModDownloads {
-            total: s.parse::<u64>().unwrap_or(0),
-            today: 0,
-        },
-        serde_json::Value::Object(map) => {
-            let total = map
-                .get("total")
-                .or_else(|| map.get("total_downloads"))
-                .or_else(|| map.get("totalDownloads"))
-                .or_else(|| map.get("downloads"))
-                .or_else(|| map.get("count"))
-                .and_then(read_u64)
-                .unwrap_or(0);
-            let today = map
-                .get("today")
-                .or_else(|| map.get("today_downloads"))
-                .or_else(|| map.get("todayDownloads"))
-                .and_then(read_u64)
-                .unwrap_or(0);
-            ModDownloads { total, today }
-        }
-        _ => ModDownloads::default(),
-    }
-}
-
-fn read_u64(value: &serde_json::Value) -> Option<u64> {
-    match value {
-        serde_json::Value::Number(num) => num.as_u64(),
-        serde_json::Value::String(s) => s.parse::<u64>().ok(),
-        _ => None,
-    }
+fn string_or_number<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Ok(match serde_json::Value::deserialize(deserializer)? {
+        serde_json::Value::String(s) => s,
+        serde_json::Value::Null => String::new(),
+        other => other.to_string(),
+    })
 }
 
 #[cfg(test)]
@@ -107,18 +73,32 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn mod_downloads_accepts_number() {
-        let parsed: ModDownloads = serde_json::from_value(json!(123)).expect("parse");
-        assert_eq!(parsed.total, 123);
-        assert_eq!(parsed.today, 0);
+    fn mod_meta_accepts_numeric_version_and_ignores_unknown_keys() {
+        let meta: ModMeta = serde_json::from_value(json!({
+            "title": "X",
+            "version": 2,
+            "id": "ignored",
+            "downloadURL": "https://example.com/x.zip"
+        }))
+        .expect("parse");
+        assert_eq!(meta.version, "2");
+        assert_eq!(
+            meta.download_url.as_deref(),
+            Some("https://example.com/x.zip")
+        );
+        assert!(!meta.requires_steamodded);
     }
 
     #[test]
-    fn mod_downloads_accepts_alias_fields() {
-        let parsed: ModDownloads =
-            serde_json::from_value(json!({"total_downloads": 456, "today_downloads": 7}))
-                .expect("parse");
-        assert_eq!(parsed.total, 456);
-        assert_eq!(parsed.today, 7);
+    fn mod_meta_serializes_with_index_field_names() {
+        let meta = ModMeta {
+            title: "X".into(),
+            last_updated: 5,
+            ..Default::default()
+        };
+        let value = serde_json::to_value(&meta).expect("serialize");
+        assert_eq!(value["last-updated"], 5);
+        assert!(value.get("requires-steamodded").is_some());
+        assert!(value.get("downloadURL").is_some());
     }
 }

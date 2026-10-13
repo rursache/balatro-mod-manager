@@ -3,6 +3,7 @@ import {
   safeLocalStorageSet,
   monitorStorageQuota,
 } from "../utils/storage-quota";
+import { ensureCatalogSchema } from "../utils/catalogSchema";
 
 export interface Mod {
   id?: string;
@@ -30,7 +31,6 @@ export interface Mod {
   version?: string | null;
   installed: boolean;
   last_updated: number;
-  downloads_total?: number;
 }
 
 export interface LocalMod {
@@ -51,13 +51,11 @@ export enum SortOption {
   NameDesc = "name_desc",
   LastUpdatedAsc = "updated_asc",
   LastUpdatedDesc = "updated_desc",
-  DownloadsAsc = "downloads_asc",
-  DownloadsDesc = "downloads_desc",
 }
 
 export const backgroundEnabled = writable(false);
 
-export const currentSort = writable<SortOption>(SortOption.DownloadsDesc);
+export const currentSort = writable<SortOption>(SortOption.LastUpdatedDesc);
 
 /** Search/filter query for Installed Mods view */
 export const installedModsSearchStore = writable<string>("");
@@ -276,6 +274,7 @@ if (typeof window !== "undefined") {
   }
 
   try {
+    ensureCatalogSchema();
     const cached = localStorage.getItem("mods-cache");
     if (cached) {
       const parsed: Mod[] = JSON.parse(cached);

@@ -49,10 +49,10 @@
   const ensureDownloadUrl = (mod: Mod): Mod => {
     if (mod.downloadURL && mod.downloadURL.trim().length > 0) return mod;
     if (mod._dirName) {
-      return { ...mod, downloadURL: `bmi://${mod._dirName}` };
+      return { ...mod, downloadURL: `index://${mod._dirName}` };
     }
     if (mod.id) {
-      return { ...mod, downloadURL: `bmi://${mod.id}` };
+      return { ...mod, downloadURL: `index://${mod.id}` };
     }
     return mod;
   };

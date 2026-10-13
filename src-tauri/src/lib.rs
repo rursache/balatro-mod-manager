@@ -1,9 +1,8 @@
 mod assets;
-mod bmi;
 pub mod commands;
 mod compat_helper;
-mod lfs;
 mod links;
+mod mod_index;
 mod models;
 mod state;
 mod thumb_queue;
@@ -125,6 +124,7 @@ pub fn run() {
                         }
                     }
                 }
+                crate::mod_index::migrate_legacy_caches();
 
                 // Ensure the Mods directory exists
                 if let Some(cfg_dir) = dirs::config_dir() {
@@ -478,11 +478,7 @@ pub fn run() {
             commands::settings::set_launch_mode,
             commands::cache::get_last_fetched,
             commands::cache::update_last_fetched,
-            commands::repo::list_repo_mods,
-            commands::repo::get_repo_file,
-            commands::repo::get_repo_thumbnail_url,
             commands::repo::fetch_repo_mods,
-            commands::repo::fetch_repo_downloads,
             commands::repo::get_cached_installed_thumbnail,
             commands::repo::get_cached_thumbnail_by_title,
             commands::repo::get_cached_thumbnails_map,
@@ -492,7 +488,6 @@ pub fn run() {
             commands::repo::get_mod_details,
             commands::repo::get_mod_repo_url,
             commands::repo::get_cached_description_by_title,
-            commands::repo::batch_fetch_thumbnails_repo,
             commands::thumbnails::enqueue_thumbnails,
             commands::thumbnails::enqueue_thumbnail,
             commands::report::build_issue_report_url,
