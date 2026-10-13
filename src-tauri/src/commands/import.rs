@@ -1,6 +1,6 @@
 use std::fs::File;
 use std::io::{Cursor, Read, Seek};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use flate2::read::GzDecoder;
 use tar::Archive;
@@ -158,6 +158,25 @@ fn extract_archive_from_reader<R: Read + Seek>(
     Ok(mod_dir)
 }
 
+fn is_junk_entry(path: &Path) -> bool {
+    path.components().any(|c| c.as_os_str() == "__MACOSX")
+        || path.file_name().is_some_and(|n| n == ".DS_Store")
+}
+
+// Relative paths made only of normal components cannot resolve outside the
+// extraction root, even when following other links that obey the same rule
+fn is_contained_relative_path(path: &Path) -> bool {
+    let mut has_normal = false;
+    for component in path.components() {
+        match component {
+            Component::Normal(_) => has_normal = true,
+            Component::CurDir => {}
+            Component::ParentDir | Component::RootDir | Component::Prefix(_) => return false,
+        }
+    }
+    has_normal
+}
+
 /// Extracts a 7Z archive.
 ///
 /// Entry paths are validated by `sevenz-rust2`, which rejects any name that would
@@ -180,13 +199,16 @@ fn extract_zip<R: Read + Seek>(reader: R, target_dir: &Path) -> Result<(), Strin
         let mut file = archive
             .by_index(i)
             .map_err(|e| format!("Failed to access file in archive: {e}"))?;
-        if file.name().starts_with("__MACOSX/") {
+        let file_path = match file.enclosed_name() {
+            Some(path) => path,
+            None => {
+                log::warn!("Skipping unsafe ZIP entry: {}", file.name());
+                continue;
+            }
+        };
+        if is_junk_entry(&file_path) {
             continue;
         }
-        let file_path = match file.enclosed_name() {
-            Some(path) => path.to_owned(),
-            None => continue,
-        };
         let output_path = target_dir.join(&file_path);
         if file.is_dir() {
             std::fs::create_dir_all(&output_path)
@@ -216,42 +238,43 @@ fn extract_tar<R: Read>(reader: R, target_dir: &Path) -> Result<(), String> {
         let mut entry = entry.map_err(|e| format!("Failed to read TAR entry: {e}"))?;
         let path = entry
             .path()
-            .map_err(|e| format!("Failed to get entry path: {e}"))?;
-        let output_path = target_dir.join(path);
-        if let Some(parent) = output_path.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| format!("Failed to create parent directory: {e}"))?;
+            .map_err(|e| format!("Failed to get entry path: {e}"))?
+            .into_owned();
+        if is_junk_entry(&path) {
+            continue;
         }
-        entry
-            .unpack(&output_path)
-            .map_err(|e| format!("Failed to unpack file {}: {e}", output_path.display()))?;
+
+        let kind = entry.header().entry_type();
+        if kind.is_symlink() || kind.is_hard_link() {
+            let link_target = entry
+                .link_name()
+                .map_err(|e| format!("Failed to read link target of {}: {e}", path.display()))?;
+            if !link_target
+                .as_deref()
+                .is_some_and(is_contained_relative_path)
+            {
+                log::warn!(
+                    "Skipping TAR link escaping the mod directory: {}",
+                    path.display()
+                );
+                continue;
+            }
+        }
+
+        // unpack_in skips entries with `..`, strips leading `/` and refuses to
+        // write through links that resolve outside target_dir
+        let unpacked = entry
+            .unpack_in(target_dir)
+            .map_err(|e| format!("Failed to unpack {}: {e}", path.display()))?;
+        if !unpacked {
+            log::warn!("Skipping unsafe TAR entry: {}", path.display());
+        }
     }
     Ok(())
 }
 
 fn extract_tar_gz<R: Read>(reader: R, target_dir: &Path) -> Result<(), String> {
-    std::fs::create_dir_all(target_dir)
-        .map_err(|e| format!("Failed to create target directory: {e}"))?;
-    let gz = GzDecoder::new(reader);
-    let mut archive = Archive::new(gz);
-    for entry in archive
-        .entries()
-        .map_err(|e| format!("Failed to read TAR entries: {e}"))?
-    {
-        let mut entry = entry.map_err(|e| format!("Failed to read TAR entry: {e}"))?;
-        let path = entry
-            .path()
-            .map_err(|e| format!("Failed to get entry path: {e}"))?;
-        let output_path = target_dir.join(path);
-        if let Some(parent) = output_path.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| format!("Failed to create parent directory: {e}"))?;
-        }
-        entry
-            .unpack(&output_path)
-            .map_err(|e| format!("Failed to unpack file {}: {e}", output_path.display()))?;
-    }
-    Ok(())
+    extract_tar(GzDecoder::new(reader), target_dir)
 }
 
 fn extract_rar(path: &Path, target_dir: &Path) -> Result<(), String> {
@@ -265,7 +288,13 @@ fn extract_rar(path: &Path, target_dir: &Path) -> Result<(), String> {
         .read_header()
         .map_err(|e| format!("Failed to read RAR entry: {e}"))?
     {
-        archive = if header.entry().is_file() {
+        let entry = header.entry();
+        let safe = is_contained_relative_path(&entry.filename);
+        if !safe {
+            log::warn!("Skipping unsafe RAR entry: {}", entry.filename.display());
+        }
+        let extract = safe && entry.is_file() && !is_junk_entry(&entry.filename);
+        archive = if extract {
             header
                 .extract_with_base(target_dir)
                 .map_err(|e| format!("Failed to extract RAR entry: {e}"))?
@@ -413,6 +442,270 @@ mod tests {
         extract_tar_gz(cursor, &target).unwrap();
 
         assert!(target.join("gzfile.txt").exists());
+    }
+
+    enum RawEntry<'a> {
+        File(&'a str, &'a [u8]),
+        Symlink(&'a str, &'a str),
+        HardLink(&'a str, &'a str),
+    }
+
+    fn append_long_name(
+        builder: &mut tar::Builder<&mut Vec<u8>>,
+        kind: tar::EntryType,
+        name: &str,
+    ) {
+        let mut data = name.as_bytes().to_vec();
+        data.push(0);
+        let mut header = tar::Header::new_gnu();
+        header.as_old_mut().name[..13].copy_from_slice(b"././@LongLink");
+        header.set_entry_type(kind);
+        header.set_mode(0o644);
+        header.set_size(data.len() as u64);
+        header.set_cksum();
+        builder.append(&header, &data[..]).unwrap();
+    }
+
+    // Writes header bytes verbatim so `..` and absolute names reach the archive
+    fn raw_tar(entries: &[RawEntry]) -> Vec<u8> {
+        let mut out = Vec::new();
+        {
+            let mut builder = tar::Builder::new(&mut out);
+            for entry in entries {
+                let (path, kind, link, data): (&str, _, Option<&str>, &[u8]) = match entry {
+                    RawEntry::File(p, d) => (p, tar::EntryType::Regular, None, d),
+                    RawEntry::Symlink(p, l) => (p, tar::EntryType::Symlink, Some(l), &[]),
+                    RawEntry::HardLink(p, l) => (p, tar::EntryType::Link, Some(l), &[]),
+                };
+                if path.len() >= 100 {
+                    append_long_name(&mut builder, tar::EntryType::GNULongName, path);
+                }
+                if let Some(link) = link.filter(|l| l.len() >= 100) {
+                    append_long_name(&mut builder, tar::EntryType::GNULongLink, link);
+                }
+                let mut header = tar::Header::new_gnu();
+                let name = &path.as_bytes()[..path.len().min(99)];
+                header.as_old_mut().name[..name.len()].copy_from_slice(name);
+                if let Some(link) = link {
+                    let link = &link.as_bytes()[..link.len().min(99)];
+                    header.set_link_name_literal(link).unwrap();
+                }
+                header.set_entry_type(kind);
+                header.set_mode(0o644);
+                header.set_size(data.len() as u64);
+                header.set_cksum();
+                builder.append(&header, data).unwrap();
+            }
+            builder.finish().unwrap();
+        }
+        out
+    }
+
+    fn gzip(data: &[u8]) -> Vec<u8> {
+        let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        encoder.write_all(data).unwrap();
+        encoder.finish().unwrap()
+    }
+
+    fn traversal_tar() -> Vec<u8> {
+        raw_tar(&[
+            RawEntry::File("../escape.txt", b"pwned"),
+            RawEntry::File("nested/../../escape2.txt", b"pwned"),
+            RawEntry::File("ok.txt", b"ok"),
+        ])
+    }
+
+    fn assert_no_traversal(root: &Path, target: &Path) {
+        assert!(target.join("ok.txt").exists());
+        assert!(!root.join("escape.txt").exists());
+        assert!(!root.join("escape2.txt").exists());
+        assert!(!target.join("escape2.txt").exists());
+    }
+
+    #[test]
+    fn test_extract_tar_skips_parent_dir_entries() {
+        let temp_dir = TempDir::new().unwrap();
+        let target = temp_dir.path().join("extracted");
+
+        extract_tar(Cursor::new(traversal_tar()), &target).unwrap();
+
+        assert_no_traversal(temp_dir.path(), &target);
+    }
+
+    #[test]
+    fn test_extract_tar_gz_skips_parent_dir_entries() {
+        let temp_dir = TempDir::new().unwrap();
+        let target = temp_dir.path().join("extracted");
+
+        extract_tar_gz(Cursor::new(gzip(&traversal_tar())), &target).unwrap();
+
+        assert_no_traversal(temp_dir.path(), &target);
+    }
+
+    fn absolute_tar(outside: &Path) -> (Vec<u8>, PathBuf) {
+        let abs = outside.join("abs.txt");
+        let tar = raw_tar(&[RawEntry::File(abs.to_str().unwrap(), b"pwned")]);
+        (tar, abs)
+    }
+
+    fn assert_absolute_entry_contained(target: &Path, abs: &Path) {
+        assert!(!abs.exists());
+        let relative: PathBuf = abs
+            .components()
+            .filter(|c| matches!(c, Component::Normal(_)))
+            .collect();
+        assert!(target.join(relative).exists());
+    }
+
+    #[test]
+    fn test_extract_tar_keeps_absolute_entries_inside_target() {
+        let temp_dir = TempDir::new().unwrap();
+        let target = temp_dir.path().join("extracted");
+        let outside = temp_dir.path().join("outside");
+        std::fs::create_dir_all(&outside).unwrap();
+        let (tar, abs) = absolute_tar(&outside);
+
+        extract_tar(Cursor::new(tar), &target).unwrap();
+
+        assert_absolute_entry_contained(&target, &abs);
+    }
+
+    #[test]
+    fn test_extract_tar_gz_keeps_absolute_entries_inside_target() {
+        let temp_dir = TempDir::new().unwrap();
+        let target = temp_dir.path().join("extracted");
+        let outside = temp_dir.path().join("outside");
+        std::fs::create_dir_all(&outside).unwrap();
+        let (tar, abs) = absolute_tar(&outside);
+
+        extract_tar_gz(Cursor::new(gzip(&tar)), &target).unwrap();
+
+        assert_absolute_entry_contained(&target, &abs);
+    }
+
+    fn link_escape_tar(outside: &Path) -> Vec<u8> {
+        let outside_abs = outside.to_str().unwrap();
+        raw_tar(&[
+            RawEntry::Symlink("rel", "../outside"),
+            RawEntry::Symlink("abs", outside_abs),
+            RawEntry::HardLink("hard", "../outside/secret.txt"),
+            RawEntry::File("rel/pwned.txt", b"pwned"),
+            RawEntry::File("abs/pwned.txt", b"pwned"),
+        ])
+    }
+
+    fn assert_no_link_escape(target: &Path, outside: &Path) {
+        for name in ["rel", "abs"] {
+            let meta = std::fs::symlink_metadata(target.join(name)).unwrap();
+            assert!(!meta.file_type().is_symlink(), "{name} must not be a link");
+        }
+        assert!(!target.join("hard").exists());
+        assert!(!outside.join("pwned.txt").exists());
+        assert_eq!(
+            std::fs::read_to_string(outside.join("secret.txt")).unwrap(),
+            "secret"
+        );
+    }
+
+    #[test]
+    fn test_extract_tar_skips_escaping_links() {
+        let temp_dir = TempDir::new().unwrap();
+        let target = temp_dir.path().join("extracted");
+        let outside = temp_dir.path().join("outside");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("secret.txt"), "secret").unwrap();
+
+        extract_tar(Cursor::new(link_escape_tar(&outside)), &target).unwrap();
+
+        assert_no_link_escape(&target, &outside);
+    }
+
+    #[test]
+    fn test_extract_tar_gz_skips_escaping_links() {
+        let temp_dir = TempDir::new().unwrap();
+        let target = temp_dir.path().join("extracted");
+        let outside = temp_dir.path().join("outside");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("secret.txt"), "secret").unwrap();
+
+        extract_tar_gz(Cursor::new(gzip(&link_escape_tar(&outside))), &target).unwrap();
+
+        assert_no_link_escape(&target, &outside);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_extract_tar_keeps_contained_symlink() {
+        let temp_dir = TempDir::new().unwrap();
+        let target = temp_dir.path().join("extracted");
+        let tar = raw_tar(&[
+            RawEntry::File("main.lua", b"-- mod"),
+            RawEntry::Symlink("alias.lua", "main.lua"),
+        ]);
+
+        extract_tar(Cursor::new(tar), &target).unwrap();
+
+        let meta = std::fs::symlink_metadata(target.join("alias.lua")).unwrap();
+        assert!(meta.file_type().is_symlink());
+        assert_eq!(
+            std::fs::read_to_string(target.join("alias.lua")).unwrap(),
+            "-- mod"
+        );
+    }
+
+    #[test]
+    fn test_extract_tar_skips_macos_junk() {
+        let temp_dir = TempDir::new().unwrap();
+        let target = temp_dir.path().join("extracted");
+        let tar = raw_tar(&[
+            RawEntry::File("__MACOSX/._main.lua", b"junk"),
+            RawEntry::File(".DS_Store", b"junk"),
+            RawEntry::File("sub/.DS_Store", b"junk"),
+            RawEntry::File("sub/main.lua", b"-- mod"),
+        ]);
+
+        extract_tar(Cursor::new(tar), &target).unwrap();
+
+        assert!(target.join("sub/main.lua").exists());
+        assert!(!target.join("__MACOSX").exists());
+        assert!(!target.join(".DS_Store").exists());
+        assert!(!target.join("sub/.DS_Store").exists());
+    }
+
+    #[test]
+    fn test_extract_zip_skips_ds_store_and_traversal() {
+        let temp_dir = TempDir::new().unwrap();
+        let target = temp_dir.path().join("extracted");
+
+        let mut zip_data = Vec::new();
+        {
+            let mut zip = zip::ZipWriter::new(Cursor::new(&mut zip_data));
+            let options = zip::write::SimpleFileOptions::default();
+            zip.start_file("sub/.DS_Store", options).unwrap();
+            zip.write_all(b"junk").unwrap();
+            zip.start_file("../escape.txt", options).unwrap();
+            zip.write_all(b"pwned").unwrap();
+            zip.start_file("sub/main.lua", options).unwrap();
+            zip.write_all(b"-- mod").unwrap();
+            zip.finish().unwrap();
+        }
+
+        extract_zip(Cursor::new(zip_data), &target).unwrap();
+
+        assert!(target.join("sub/main.lua").exists());
+        assert!(!target.join("sub/.DS_Store").exists());
+        assert!(!temp_dir.path().join("escape.txt").exists());
+    }
+
+    #[test]
+    fn test_is_contained_relative_path() {
+        assert!(is_contained_relative_path(Path::new("a/b.lua")));
+        assert!(is_contained_relative_path(Path::new("./a")));
+        assert!(!is_contained_relative_path(Path::new("../a")));
+        assert!(!is_contained_relative_path(Path::new("a/../../b")));
+        assert!(!is_contained_relative_path(Path::new("/etc/passwd")));
+        assert!(!is_contained_relative_path(Path::new("")));
+        assert!(!is_contained_relative_path(Path::new(".")));
     }
 
     #[test]
