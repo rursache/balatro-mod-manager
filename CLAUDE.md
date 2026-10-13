@@ -166,7 +166,7 @@ The project uses a **workspace structure** with two Rust crates:
 **Windows**
 
 - Target: `x86_64-pc-windows-msvc`
-- Code signing via SignPath (production releases)
+- Windows builds are unsigned
 
 ## Key Workflows
 
