@@ -46,7 +46,8 @@ fn index_description(item: &ArchiveModItem) -> Option<&str> {
     (!from_thunderstore).then_some(item.description.as_str())
 }
 
-/// README of the latest version, cached on disk per version
+/// README of the latest version, cached on disk per version. Only the detail view asks for
+/// it, cards use the short description so the catalog never bursts README requests
 async fn thunderstore_readme(info: &ThunderstoreInfo) -> Option<String> {
     let (_, descs_dir) = ensure_assets_dirs_async().await.ok()?;
     let path = descs_dir.join(format!(
@@ -54,24 +55,28 @@ async fn thunderstore_readme(info: &ThunderstoreInfo) -> Option<String> {
         safe_slug(&info.full_name),
         safe_slug(&info.latest_version)
     ));
-    if let Ok(text) = tokio::fs::read_to_string(&path).await
-        && !text.trim().is_empty()
+    match thunderstore::readme_cached(&info.namespace, &info.name, &info.latest_version, &path)
+        .await
     {
-        return Some(text);
-    }
-    match thunderstore::fetch_readme(&info.namespace, &info.name, &info.latest_version).await {
-        Ok(text) if !text.trim().is_empty() => {
-            if let Err(e) = tokio::fs::write(&path, &text).await {
-                log::warn!("Failed to cache README of {}: {e}", info.full_name);
-            }
-            Some(text)
-        }
+        Ok(text) if !text.trim().is_empty() => Some(text),
         Ok(_) => None,
         Err(e) => {
             log::warn!("Failed to fetch README of {}: {e}", info.full_name);
             None
         }
     }
+}
+
+/// Short text for a card, never touches the network
+fn card_description(item: &ArchiveModItem) -> String {
+    if let Some(text) = index_description(item) {
+        return text.to_string();
+    }
+    item.thunderstore
+        .as_ref()
+        .map(|t| t.description.trim())
+        .filter(|d| !d.is_empty())
+        .map_or_else(|| item.description.clone(), str::to_string)
 }
 
 /// Index description, then the Thunderstore README, then the short description
@@ -183,6 +188,7 @@ pub async fn get_cached_thumbnails_map(
     Ok(out)
 }
 
+/// Card description from the catalog, Thunderstore READMEs are left to `get_mod_details`
 #[tauri::command]
 pub async fn get_description_cached_or_remote(
     title: String,
@@ -196,7 +202,7 @@ pub async fn get_description_cached_or_remote(
         && index_description(item).is_none()
         && item.thunderstore.is_some()
     {
-        return Ok(describe(item).await);
+        return Ok(card_description(item));
     }
 
     if let Some(item) = item
@@ -306,5 +312,26 @@ mod tests {
         item.source = CatalogSource::Index;
         item.description = " ".into();
         assert_eq!(index_description(&item), None);
+    }
+
+    #[test]
+    fn card_description_never_needs_the_readme() {
+        let info = ThunderstoreInfo {
+            description: " short ".into(),
+            ..Default::default()
+        };
+        let mut item = ArchiveModItem {
+            description: "short".into(),
+            source: CatalogSource::Thunderstore,
+            thunderstore: Some(info),
+            ..Default::default()
+        };
+        assert_eq!(card_description(&item), "short");
+        item.source = CatalogSource::Merged;
+        item.description = "from index".into();
+        assert_eq!(card_description(&item), "from index");
+        item.description = String::new();
+        item.thunderstore = Some(ThunderstoreInfo::default());
+        assert_eq!(card_description(&item), "");
     }
 }

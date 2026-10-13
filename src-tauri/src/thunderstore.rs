@@ -32,6 +32,9 @@ const CACHE_SCHEMA: u32 = 1;
 const MIN_REFRESH_SECS: u64 = 300;
 const FAILED_RETRY_SECS: u64 = 60;
 const MAX_BLOB_BYTES: u64 = 64 * 1024 * 1024;
+const README_ATTEMPTS: u32 = 4;
+const README_BACKOFF_SECS: u64 = 2;
+const README_MAX_DELAY_SECS: u64 = 60;
 
 pub fn source_id() -> String {
     format!("thunderstore:{COMMUNITY}")
@@ -75,6 +78,9 @@ static CACHE_GENERATION: AtomicU64 = AtomicU64::new(0);
 static LAST_FAILED_SYNC: AtomicU64 = AtomicU64::new(0);
 static LAST_ERROR: Lazy<std::sync::Mutex<Option<String>>> =
     Lazy::new(|| std::sync::Mutex::new(None));
+static README_PERMITS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
+static README_COOLDOWN: std::sync::Mutex<Option<tokio::time::Instant>> =
+    std::sync::Mutex::new(None);
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -446,6 +452,7 @@ pub struct FetchResponse {
     pub status: u16,
     pub location: Option<String>,
     pub body: Vec<u8>,
+    pub retry_after: Option<String>,
 }
 
 /// HTTP access used by the sync, injectable so tests run without the network
@@ -473,6 +480,11 @@ impl Fetcher for HttpFetcher {
             .get(reqwest::header::LOCATION)
             .and_then(|v| v.to_str().ok())
             .map(str::to_string);
+        let retry_after = resp
+            .headers()
+            .get(reqwest::header::RETRY_AFTER)
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_string);
         let body = if (300..400).contains(&status) {
             Vec::new()
         } else {
@@ -482,6 +494,7 @@ impl Fetcher for HttpFetcher {
             status,
             location,
             body,
+            retry_after,
         })
     }
 }
@@ -594,7 +607,45 @@ pub(crate) async fn refresh_or_keep<F: Fetcher>(
     }
 }
 
-pub async fn fetch_readme(namespace: &str, name: &str, version: &str) -> Result<String, String> {
+/// Delay before retrying a rate limited request, the server's `Retry-After` seconds when
+/// given (HTTP dates fall back to the backoff), else 2, 4, 8 seconds
+pub fn retry_delay(retry_after: Option<&str>, attempt: u32) -> Duration {
+    let secs = retry_after
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .unwrap_or_else(|| README_BACKOFF_SECS << attempt.min(5));
+    Duration::from_secs(secs.min(README_MAX_DELAY_SECS))
+}
+
+fn is_rate_limited(status: u16) -> bool {
+    status == 429 || status == 503
+}
+
+async fn wait_for_readme_cooldown() {
+    let until = *README_COOLDOWN.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(until) = until {
+        let now = tokio::time::Instant::now();
+        if until > now {
+            tokio::time::sleep(until - now).await;
+        }
+    }
+}
+
+fn start_readme_cooldown(delay: Duration) {
+    let until = tokio::time::Instant::now() + delay;
+    let mut guard = README_COOLDOWN.lock().unwrap_or_else(|e| e.into_inner());
+    if guard.is_none_or(|current| current < until) {
+        *guard = Some(until);
+    }
+}
+
+/// A 429 pauses every README request for the server's `Retry-After` (or an exponential
+/// backoff) before the same request is retried. Callers hold a README permit
+pub(crate) async fn fetch_readme_with<F: Fetcher>(
+    fetcher: &F,
+    namespace: &str,
+    name: &str,
+    version: &str,
+) -> Result<String, String> {
     #[derive(Deserialize)]
     struct Readme {
         markdown: Option<String>,
@@ -603,9 +654,68 @@ pub async fn fetch_readme(namespace: &str, name: &str, version: &str) -> Result<
         return Err(format!("invalid package {namespace}-{name}-{version}"));
     }
     let url = readme_url(namespace, name, version);
-    let body = success_body(&url, HttpFetcher.get(&url, true).await?)?;
-    let readme: Readme = serde_json::from_slice(&body).map_err(|e| e.to_string())?;
-    Ok(readme.markdown.unwrap_or_default())
+    let mut attempt = 0;
+    loop {
+        wait_for_readme_cooldown().await;
+        let resp = fetcher.get(&url, true).await?;
+        if is_rate_limited(resp.status) {
+            if attempt + 1 >= README_ATTEMPTS {
+                return Err(format!("HTTP {} from {url}", resp.status));
+            }
+            let delay = retry_delay(resp.retry_after.as_deref(), attempt);
+            log::warn!("Thunderstore: README rate limited, retrying in {delay:?}");
+            start_readme_cooldown(delay);
+            attempt += 1;
+            continue;
+        }
+        let body = success_body(&url, resp)?;
+        let readme: Readme = serde_json::from_slice(&body).map_err(|e| e.to_string())?;
+        return Ok(readme.markdown.unwrap_or_default());
+    }
+}
+
+async fn readme_permit() -> Result<tokio::sync::SemaphorePermit<'static>, String> {
+    README_PERMITS
+        .acquire()
+        .await
+        .map_err(|e| format!("README queue closed: {e}"))
+}
+
+/// README markdown of one version, one README request runs at a time app wide
+#[cfg(test)]
+pub async fn fetch_readme(namespace: &str, name: &str, version: &str) -> Result<String, String> {
+    let _permit = readme_permit().await?;
+    fetch_readme_with(&HttpFetcher, namespace, name, version).await
+}
+
+/// README of one version, read from `cache` or fetched and written there. The disk check
+/// runs again once queued so repeated opens of the same mod fetch it only once
+pub async fn readme_cached(
+    namespace: &str,
+    name: &str,
+    version: &str,
+    cache: &Path,
+) -> Result<String, String> {
+    let read_cache = || async {
+        tokio::fs::read_to_string(cache)
+            .await
+            .ok()
+            .filter(|t| !t.trim().is_empty())
+    };
+    if let Some(text) = read_cache().await {
+        return Ok(text);
+    }
+    let _permit = readme_permit().await?;
+    if let Some(text) = read_cache().await {
+        return Ok(text);
+    }
+    let text = fetch_readme_with(&HttpFetcher, namespace, name, version).await?;
+    if !text.trim().is_empty()
+        && let Err(e) = tokio::fs::write(cache, &text).await
+    {
+        log::warn!("Failed to cache README of {namespace}-{name}: {e}");
+    }
+    Ok(text)
 }
 
 // ---------------------------------------------------------------------------
@@ -817,6 +927,7 @@ pub(crate) mod tests {
                     status,
                     location: location.map(str::to_string),
                     body,
+                    retry_after: None,
                 },
             );
             self
@@ -857,6 +968,41 @@ pub(crate) mod tests {
         find_package(packages, full_name).expect(full_name)
     }
 
+    /// Answers each request with the next queued response
+    struct SeqFetcher {
+        responses: Mutex<Vec<FetchResponse>>,
+        calls: Mutex<usize>,
+    }
+
+    impl SeqFetcher {
+        fn new(mut responses: Vec<FetchResponse>) -> Self {
+            responses.reverse();
+            Self {
+                responses: Mutex::new(responses),
+                calls: Mutex::new(0),
+            }
+        }
+    }
+
+    impl Fetcher for SeqFetcher {
+        async fn get(&self, _url: &str, _follow: bool) -> Result<FetchResponse, String> {
+            *self.calls.lock().unwrap() += 1;
+            self.responses
+                .lock()
+                .unwrap()
+                .pop()
+                .ok_or_else(|| "no more responses".to_string())
+        }
+    }
+
+    fn limited(retry_after: &str) -> FetchResponse {
+        FetchResponse {
+            status: 429,
+            retry_after: Some(retry_after.to_string()),
+            ..Default::default()
+        }
+    }
+
     pub fn package(
         full_name: &str,
         categories: &[&str],
@@ -878,6 +1024,57 @@ pub(crate) mod tests {
             }],
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn retry_delay_honors_retry_after_then_backs_off() {
+        assert_eq!(retry_delay(Some("7"), 0), Duration::from_secs(7));
+        assert_eq!(retry_delay(Some(" 3 "), 2), Duration::from_secs(3));
+        assert_eq!(retry_delay(Some("100000"), 0), Duration::from_secs(60));
+        let date = Some("Wed, 21 Oct 2026 07:28:00 GMT");
+        assert_eq!(retry_delay(date, 0), Duration::from_secs(2));
+        assert_eq!(retry_delay(None, 1), Duration::from_secs(4));
+        assert_eq!(retry_delay(None, 2), Duration::from_secs(8));
+        assert_eq!(retry_delay(None, 30), Duration::from_secs(60));
+    }
+
+    #[test]
+    fn readme_retries_after_a_429() {
+        let body = br#"{"markdown":"Hello"}"#.to_vec();
+        let ok = FetchResponse {
+            status: 200,
+            body,
+            ..Default::default()
+        };
+        let fetcher = SeqFetcher::new(vec![limited("0"), ok]);
+        let text = block_on(fetch_readme_with(
+            &fetcher,
+            "nh6574",
+            "JokerDisplay",
+            "1.0.0",
+        ));
+        assert_eq!(text.as_deref(), Ok("Hello"));
+        assert_eq!(*fetcher.calls.lock().unwrap(), 2);
+    }
+
+    #[test]
+    fn readme_gives_up_after_repeated_429s() {
+        let fetcher = SeqFetcher::new((0..README_ATTEMPTS).map(|_| limited("0")).collect());
+        let err = block_on(fetch_readme_with(
+            &fetcher,
+            "nh6574",
+            "JokerDisplay",
+            "1.0.0",
+        ));
+        assert!(err.unwrap_err().contains("HTTP 429"));
+        assert_eq!(*fetcher.calls.lock().unwrap(), README_ATTEMPTS as usize);
+    }
+
+    #[test]
+    fn readme_rejects_bad_names_without_a_request() {
+        let fetcher = SeqFetcher::new(Vec::new());
+        assert!(block_on(fetch_readme_with(&fetcher, "a/b", "c", "1.0.0")).is_err());
+        assert_eq!(*fetcher.calls.lock().unwrap(), 0);
     }
 
     #[test]

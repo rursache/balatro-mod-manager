@@ -1634,7 +1634,7 @@
   }
 
   async function fillDescriptions(mods: (Mod & { _dirName?: string })[]) {
-    // Limit concurrent requests to avoid 429s and prioritize detail view
+    // Catalog reads only, Thunderstore READMEs are fetched by the detail view
     const limit = 6;
     let i = 0;
     const updates: { title: string; description: string }[] = [];
