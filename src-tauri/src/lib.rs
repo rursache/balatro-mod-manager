@@ -133,6 +133,24 @@ pub fn run() {
                 }
                 crate::mod_index::migrate_legacy_caches();
 
+                // Thunderstore installs made before the manifest got a name Steamodded skips
+                match db.get_installed_mods() {
+                    Ok(rows) => {
+                        let dirs = crate::commands::install::installed_mods_dirs();
+                        let renamed =
+                            bmm_lib::installer::migrate_thunderstore_manifests(&rows, &dirs);
+                        if !renamed.is_empty() {
+                            log::info!(
+                                "Renamed {} Thunderstore manifest(s) out of Steamodded's way",
+                                renamed.len()
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        log::warn!("Failed to read installed mods for manifest migration: {e}")
+                    }
+                }
+
                 // Ensure the Mods directory exists
                 if let Some(cfg_dir) = dirs::config_dir() {
                     let mods_dir = cfg_dir.join("Balatro").join("Mods");

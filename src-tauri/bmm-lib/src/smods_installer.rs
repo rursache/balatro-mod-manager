@@ -90,13 +90,23 @@ pub fn is_steamodded_install(path: &Path) -> bool {
         return false;
     }
 
-    if let Ok(raw) = fs::read_to_string(path.join("manifest.json"))
-        && let Ok(manifest) = serde_json::from_str::<serde_json::Value>(&raw)
-        && manifest
-            .get("name")
-            .and_then(|n| n.as_str())
-            .is_some_and(|n| n.eq_ignore_ascii_case("steamodded"))
-    {
+    let named_steamodded = [
+        crate::local_mod_detection::THUNDERSTORE_MANIFEST_FILE,
+        crate::local_mod_detection::LEGACY_THUNDERSTORE_MANIFEST_FILE,
+    ]
+    .iter()
+    .any(|file| {
+        fs::read_to_string(path.join(file))
+            .ok()
+            .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+            .is_some_and(|manifest| {
+                manifest
+                    .get("name")
+                    .and_then(|n| n.as_str())
+                    .is_some_and(|n| n.eq_ignore_ascii_case("steamodded"))
+            })
+    });
+    if named_steamodded {
         return true;
     }
 
@@ -705,6 +715,13 @@ mod tests {
             r#"{"name": "Steamodded", "version_number": "1.0.0"}"#,
         );
         assert!(is_steamodded_install(&by_manifest));
+
+        let by_stored_manifest = td.path().join("Steamodded-Steamodded");
+        write(
+            &by_stored_manifest.join(crate::local_mod_detection::THUNDERSTORE_MANIFEST_FILE),
+            r#"{"name": "Steamodded", "version_number": "1.0.0"}"#,
+        );
+        assert!(is_steamodded_install(&by_stored_manifest));
 
         let by_layout = td.path().join("smods-main");
         write(&by_layout.join("src").join("core.lua"), "");

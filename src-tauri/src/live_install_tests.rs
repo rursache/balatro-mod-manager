@@ -124,7 +124,12 @@ fn live_install_joker_display_and_multiplayer_api() {
             run.warnings
         );
         let joker_dir = mods.join("nh6574-JokerDisplay");
-        assert!(joker_dir.join("manifest.json").is_file());
+        assert!(!joker_dir.join("manifest.json").exists());
+        assert!(
+            joker_dir
+                .join(bmm_lib::local_mod_detection::THUNDERSTORE_MANIFEST_FILE)
+                .is_file()
+        );
         assert!(
             std::fs::read_dir(&joker_dir)
                 .unwrap()

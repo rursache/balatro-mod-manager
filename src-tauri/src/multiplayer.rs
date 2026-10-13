@@ -8,7 +8,7 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use bmm_lib::database::{InstalledMod, SOURCE_THUNDERSTORE};
-use bmm_lib::local_mod_detection::{parse_thunderstore_manifest_str, thunderstore_package_ref};
+use bmm_lib::local_mod_detection::{read_mod_dir_manifest, thunderstore_package_ref};
 use serde::{Deserialize, Serialize};
 
 use crate::thunderstore::{self, TsPackage};
@@ -93,7 +93,7 @@ pub struct FoundMod {
     pub id: String,
     pub version: Option<String>,
     pub dependencies: Vec<String>,
-    /// `Namespace-Name` from manifest.json and a matching folder name
+    /// `Namespace-Name` from the package manifest and a matching folder name
     pub package: Option<String>,
     pub package_version: Option<String>,
     pub disabled: bool,
@@ -164,10 +164,7 @@ fn read_mod_folder(path: &Path) -> Option<FoundMod> {
         found.dependencies = json_strings(value.get("dependencies"));
         break;
     }
-    if let Some(manifest) = std::fs::read_to_string(path.join("manifest.json"))
-        .ok()
-        .and_then(|t| parse_thunderstore_manifest_str(&t))
-    {
+    if let Some(manifest) = read_mod_dir_manifest(path) {
         let package = thunderstore_package_ref(&manifest, Some(&folder));
         found.package = package.full_name;
         found.package_version = package.version;
@@ -1604,6 +1601,23 @@ mod tests {
         assert!(resolve_gamemode(&packages, "ts:BalatroMultiplayer-MultiplayerSpeedrun").is_some());
         assert!(resolve_gamemode(&packages, API_PACKAGE).is_none());
         assert!(resolve_gamemode(&packages, "nh6574-JokerDisplay").is_none());
+    }
+
+    #[test]
+    fn scan_reads_the_stored_thunderstore_manifest() {
+        let td = tempfile::tempdir().unwrap();
+        let mods = td.path().join("Mods");
+        let api = api_package(&mods, &[]);
+        std::fs::rename(
+            api.join("manifest.json"),
+            api.join(bmm_lib::local_mod_detection::THUNDERSTORE_MANIFEST_FILE),
+        )
+        .unwrap();
+        let found = scan_mods_dir(&mods);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].package.as_deref(), Some(API_PACKAGE));
+        assert_eq!(found[0].package_version.as_deref(), Some("0.1.2"));
+        assert_eq!(found[0].id, "MultiplayerAPI");
     }
 
     #[test]

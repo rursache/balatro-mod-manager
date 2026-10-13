@@ -23,6 +23,7 @@ use crate::http::shared_client;
 use crate::local_mod_detection::{
     ThunderstoreManifest, ensure_proton_mod_dir_link, mod_dir_candidates,
     parse_thunderstore_manifest_str, resolve_mods_dir_path, split_package_folder_name,
+    stash_thunderstore_manifest,
 };
 use flate2::read::GzDecoder;
 use reqwest::header::{CONTENT_DISPOSITION, CONTENT_TYPE};
@@ -1242,6 +1243,64 @@ pub fn cleanup_replaced_install(
     removed
 }
 
+/// Renames the root manifest.json of tracked Thunderstore installs made before it was
+/// stored as [`crate::local_mod_detection::THUNDERSTORE_MANIFEST_FILE`]. Only rows with
+/// the Thunderstore source whose folder resolves inside one of `mods_dirs` are touched
+/// and only when the file is that package's manifest. Safe to run on every start,
+/// returns the folders whose manifest was renamed
+pub fn migrate_thunderstore_manifests(
+    rows: &[crate::database::InstalledMod],
+    mods_dirs: &[PathBuf],
+) -> Vec<PathBuf> {
+    let mods_dirs: Vec<PathBuf> = mods_dirs
+        .iter()
+        .filter(|d| d.is_dir())
+        .map(|d| canonical_or_self(d))
+        .collect();
+    let mut renamed = Vec::new();
+    for row in rows {
+        if row.source != crate::database::SOURCE_THUNDERSTORE {
+            continue;
+        }
+        let dir = PathBuf::from(&row.path);
+        let Ok(canonical) = dir.canonicalize() else {
+            continue;
+        };
+        if !mods_dirs
+            .iter()
+            .any(|m| canonical.starts_with(m) && &canonical != m)
+        {
+            continue;
+        }
+        let folder = canonical.file_name().and_then(|n| n.to_str());
+        let package = row
+            .source_id
+            .as_deref()
+            .or(folder)
+            .and_then(split_package_folder_name)
+            .map(|(_, name)| name);
+        let Some(package) = package else {
+            continue;
+        };
+        match stash_thunderstore_manifest(&canonical, package) {
+            Ok(true) => {
+                log::info!(
+                    "Renamed the Thunderstore manifest of {} in {}",
+                    row.name,
+                    canonical.display()
+                );
+                renamed.push(canonical);
+            }
+            Ok(false) => {}
+            Err(e) => log::warn!(
+                "Failed to rename the Thunderstore manifest in {}: {e}",
+                canonical.display()
+            ),
+        }
+    }
+    renamed
+}
+
 /// Result of installing a Thunderstore package
 #[derive(Debug, Clone, Serialize)]
 pub struct ThunderstoreInstall {
@@ -1250,7 +1309,8 @@ pub struct ThunderstoreInstall {
     /// The installed folder, None when the package has no payload so the
     /// caller installs its dependencies only and warns the user
     pub path: Option<PathBuf>,
-    /// The package's root manifest.json, when it has a readable one
+    /// The package's root manifest.json, when it has a readable one. It is stored
+    /// as [`crate::local_mod_detection::THUNDERSTORE_MANIFEST_FILE`]
     pub manifest: Option<ThunderstoreManifest>,
     /// Nested folder whose contents were moved up to the install root
     pub hoisted_from: Option<String>,
@@ -1370,6 +1430,8 @@ pub async fn install_thunderstore_package_into(
 /// - when the root has no payload but a single nested folder does, that folder
 ///   is moved up so Lovely finds `lovely.toml` and `lovely/` at the mod root,
 ///   root files such as manifest.json are kept next to it
+/// - the Thunderstore manifest is stored as
+///   [`crate::local_mod_detection::THUNDERSTORE_MANIFEST_FILE`] so Steamodded does not parse it
 /// - a package without any payload is not extracted, see [`ThunderstoreInstall::path`]
 /// - an existing install is replaced only after extraction succeeded and stays
 ///   disabled when it had a `.lovelyignore`
@@ -1434,6 +1496,9 @@ pub fn install_thunderstore_archive(
     if let Err(e) = extract_planned_entries(&mut zip, &layout.entries, &staging_dir) {
         let _ = fs::remove_dir_all(&staging_dir);
         return Err(e);
+    }
+    if let Err(e) = stash_thunderstore_manifest(&staging_dir, name) {
+        log::warn!("Failed to rename the manifest of {folder_name}: {e}");
     }
 
     let was_disabled = target_dir.join(".lovelyignore").exists();
@@ -2294,6 +2359,107 @@ mod tests {
         std::fs::read_to_string(path).unwrap()
     }
 
+    fn assert_manifest_stashed(dir: &Path) {
+        use crate::local_mod_detection::THUNDERSTORE_MANIFEST_FILE;
+        assert!(!dir.join("manifest.json").exists());
+        assert_eq!(read(&dir.join(THUNDERSTORE_MANIFEST_FILE)), TS_MANIFEST);
+    }
+
+    fn ts_row(
+        name: &str,
+        path: &Path,
+        source: &str,
+        source_id: Option<&str>,
+    ) -> crate::database::InstalledMod {
+        crate::database::InstalledMod {
+            name: name.to_string(),
+            path: path.to_string_lossy().into_owned(),
+            dependencies: Vec::new(),
+            current_version: None,
+            orphaned: false,
+            source: source.to_string(),
+            source_id: source_id.map(str::to_string),
+            installed_at: None,
+        }
+    }
+
+    #[test]
+    fn migration_renames_manifests_of_tracked_thunderstore_rows_only() {
+        use crate::database::{SOURCE_INDEX, SOURCE_THUNDERSTORE};
+        use crate::local_mod_detection::THUNDERSTORE_MANIFEST_FILE;
+        let (td, mods) = mods_root();
+        let with_manifest = |dir: &Path| {
+            std::fs::create_dir_all(dir).unwrap();
+            std::fs::write(dir.join("main.lua"), "-- mod").unwrap();
+            std::fs::write(dir.join("manifest.json"), TS_MANIFEST).unwrap();
+        };
+        let tracked = mods.join("Ns-Pkg");
+        with_manifest(&tracked);
+        let untracked = mods.join("Other-Pkg");
+        with_manifest(&untracked);
+        let index_row = mods.join("Pkg");
+        with_manifest(&index_row);
+        let outside = td.path().join("Elsewhere").join("Ns-Pkg");
+        with_manifest(&outside);
+        let rows = vec![
+            ts_row("Pkg", &tracked, SOURCE_THUNDERSTORE, Some("Ns-Pkg")),
+            ts_row("Pkg index", &index_row, SOURCE_INDEX, None),
+            ts_row("Pkg outside", &outside, SOURCE_THUNDERSTORE, Some("Ns-Pkg")),
+        ];
+
+        let renamed = migrate_thunderstore_manifests(&rows, std::slice::from_ref(&mods));
+
+        assert_eq!(renamed, vec![tracked.canonicalize().unwrap()]);
+        assert_manifest_stashed(&tracked);
+        for dir in [&untracked, &index_row, &outside] {
+            assert!(dir.join("manifest.json").exists(), "{}", dir.display());
+            assert!(!dir.join(THUNDERSTORE_MANIFEST_FILE).exists());
+        }
+
+        // A second run finds nothing left to do
+        assert!(migrate_thunderstore_manifests(&rows, std::slice::from_ref(&mods)).is_empty());
+        assert_manifest_stashed(&tracked);
+    }
+
+    #[test]
+    fn migration_skips_a_mods_own_manifest_json() {
+        use crate::database::SOURCE_THUNDERSTORE;
+        let (_td, mods) = mods_root();
+        let dir = mods.join("Ns-Pkg");
+        std::fs::create_dir_all(&dir).unwrap();
+        let own = r#"{"id": "Pkg", "name": "Pkg", "author": ["me"], "description": "d", "prefix": "pkg", "main_file": "main.lua"}"#;
+        std::fs::write(dir.join("manifest.json"), own).unwrap();
+        let rows = vec![ts_row("Pkg", &dir, SOURCE_THUNDERSTORE, Some("Ns-Pkg"))];
+
+        assert!(migrate_thunderstore_manifests(&rows, std::slice::from_ref(&mods)).is_empty());
+        assert_eq!(read(&dir.join("manifest.json")), own);
+    }
+
+    #[test]
+    fn thunderstore_install_keeps_a_mods_own_manifest_json() {
+        // Steamodded metadata that happens to be named manifest.json
+        let own = r#"{"id": "Pkg", "name": "Pkg", "author": ["me"], "description": "d", "prefix": "pkg", "main_file": "main.lua", "version_number": "1.0.0", "website_url": "", "dependencies": []}"#;
+        let (_td, mods, _result) = install_ts(&[
+            ("manifest.json", TS_MANIFEST),
+            ("Pkg/manifest.json", own),
+            ("Pkg/main.lua", "-- main"),
+        ]);
+        let dir = mods.join("Ns-Pkg");
+        assert_eq!(read(&dir.join("manifest.json")), own);
+        assert!(
+            !dir.join(crate::local_mod_detection::THUNDERSTORE_MANIFEST_FILE)
+                .exists()
+        );
+    }
+
+    #[test]
+    fn thunderstore_install_keeps_a_manifest_of_another_package() {
+        let other = TS_MANIFEST.replace("\"Pkg\"", "\"Other\"");
+        let (_td, mods, _result) =
+            install_ts(&[("manifest.json", &other), ("main.lua", "-- main")]);
+        assert!(mods.join("Ns-Pkg/manifest.json").exists());
+    }
+
     #[test]
     fn thunderstore_root_layout_installs_as_published() {
         let (_td, mods, result) = install_ts(&[
@@ -2313,7 +2479,7 @@ mod tests {
         assert_eq!(read(&dir.join("main.lua")), "-- main");
         assert!(dir.join("lovely/patch.toml").exists());
         assert!(dir.join("assets/1x/a.png").exists());
-        assert!(dir.join("manifest.json").exists());
+        assert_manifest_stashed(&dir);
         let manifest = result.manifest.expect("manifest parsed");
         assert_eq!(manifest.version_number.as_deref(), Some("1.0.0"));
         assert!(!mods.join(".staging_Ns-Pkg").exists());
@@ -2343,7 +2509,7 @@ mod tests {
         assert!(dir.join("src/jokers/pot.lua").exists());
         assert!(!dir.join("Pkg").exists());
         // Root metadata stays, the hoisted copy wins on name clashes
-        assert!(dir.join("manifest.json").exists());
+        assert_manifest_stashed(&dir);
         assert!(dir.join("icon.png").exists());
         assert!(dir.join("CHANGELOG.md").exists());
         assert_eq!(read(&dir.join("README.md")), "inner");
@@ -2373,7 +2539,7 @@ mod tests {
         assert_eq!(read(&dir.join("main.lua")), "-- main");
         assert!(dir.join("Pkg.json").exists());
         assert!(dir.join("config.lua").exists());
-        assert!(dir.join("manifest.json").exists());
+        assert_manifest_stashed(&dir);
         let names: Vec<String> = std::fs::read_dir(&dir)
             .unwrap()
             .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())

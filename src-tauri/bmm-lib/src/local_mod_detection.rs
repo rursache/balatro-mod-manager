@@ -893,7 +893,7 @@ pub struct DetectedMod {
     pub conflicts: Vec<String>,
     pub catalog_match: Option<CatalogMatch>,
     pub is_duplicate: bool,
-    /// Thunderstore identity read from a `manifest.json`, so the UI can offer to track it
+    /// Thunderstore identity read from the package manifest, so the UI can offer to track it
     #[serde(default)]
     pub thunderstore: Option<ThunderstorePackageRef>,
 }
@@ -906,7 +906,8 @@ pub struct CatalogMatch {
     pub version: Option<String>,
 }
 
-/// The `manifest.json` at the root of every Thunderstore package
+/// The `manifest.json` at the root of every Thunderstore package, stored as
+/// [`THUNDERSTORE_MANIFEST_FILE`] by this app
 #[derive(Debug, Serialize, Deserialize, Clone, Default, PartialEq, Eq)]
 pub struct ThunderstoreManifest {
     pub name: String,
@@ -958,6 +959,79 @@ pub fn parse_thunderstore_manifest_str(content: &str) -> Option<ThunderstoreMani
         .or_else(|_| serde_json::from_str(&strip_trailing_commas(content)))
         .ok()?;
     (!manifest.name.trim().is_empty()).then_some(manifest)
+}
+
+/// Name this app stores a package's Thunderstore manifest under. Steamodded parses every
+/// `*.json` in a mod folder and one level below as mod metadata, so a non json name keeps
+/// it from logging "Found invalid metadata JSON file" for every package on each launch
+pub const THUNDERSTORE_MANIFEST_FILE: &str = "thunderstore-manifest.txt";
+
+/// Name used by Thunderstore packages, r2modman and manual installs
+pub const LEGACY_THUNDERSTORE_MANIFEST_FILE: &str = "manifest.json";
+
+/// The Thunderstore manifest of `mod_dir`, the stored name first, then manifest.json
+pub fn thunderstore_manifest_path(mod_dir: &Path) -> Option<PathBuf> {
+    [
+        THUNDERSTORE_MANIFEST_FILE,
+        LEGACY_THUNDERSTORE_MANIFEST_FILE,
+    ]
+    .iter()
+    .map(|name| mod_dir.join(name))
+    .find(|path| path.is_file())
+}
+
+/// Reads and parses the Thunderstore manifest of `mod_dir`, see [`thunderstore_manifest_path`]
+pub fn read_mod_dir_manifest(mod_dir: &Path) -> Option<ThunderstoreManifest> {
+    let path = thunderstore_manifest_path(mod_dir)?;
+    read_thunderstore_manifest(&path)
+}
+
+/// True when `content` has the full Thunderstore upload shape for package `package_name`
+/// and none of the Steamodded metadata keys, so a mod's own json is never mistaken for it
+pub fn is_thunderstore_manifest_for(content: &str, package_name: &str) -> bool {
+    let content = content.trim_start_matches('\u{feff}');
+    let Some(serde_json::Value::Object(map)) = serde_json::from_str(content)
+        .or_else(|_| serde_json::from_str(&strip_trailing_commas(content)))
+        .ok()
+    else {
+        return false;
+    };
+    let is_str = |key: &str| map.get(key).is_some_and(serde_json::Value::is_string);
+    let shape = is_str("name")
+        && is_str("version_number")
+        && is_str("website_url")
+        && is_str("description")
+        && map
+            .get("dependencies")
+            .is_some_and(serde_json::Value::is_array);
+    let smods_keys = ["id", "prefix", "main_file"]
+        .iter()
+        .any(|key| map.contains_key(*key));
+    let same_package = map
+        .get("name")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|name| name.trim().eq_ignore_ascii_case(package_name));
+    shape && !smods_keys && same_package
+}
+
+/// Renames `mod_dir/manifest.json` to [`THUNDERSTORE_MANIFEST_FILE`] when it is the
+/// Thunderstore manifest of package `package_name`. Returns true when it was renamed
+pub fn stash_thunderstore_manifest(mod_dir: &Path, package_name: &str) -> std::io::Result<bool> {
+    let legacy = mod_dir.join(LEGACY_THUNDERSTORE_MANIFEST_FILE);
+    if !legacy.is_file() {
+        return Ok(false);
+    }
+    // Large files are not manifests and are left alone
+    if fs::metadata(&legacy)?.len() > 1024 * 1024 {
+        return Ok(false);
+    }
+    let content = fs::read_to_string(&legacy)?;
+    if !is_thunderstore_manifest_for(&content, package_name) {
+        return Ok(false);
+    }
+    // A leftover stored copy is older than the manifest.json next to it
+    fs::rename(&legacy, mod_dir.join(THUNDERSTORE_MANIFEST_FILE))?;
+    Ok(true)
 }
 
 /// Builds the package identity of a manifest found in `folder_name`. The
@@ -1679,9 +1753,8 @@ fn detect_mod_in_directory(mod_path: &Path) -> Result<Option<DetectedMod>, Strin
         .and_then(|n| n.to_str())
         .ok_or_else(|| format!("Invalid directory name: {}", mod_path.display()))?;
 
-    // Check for Thunderstore manifest.json first
-    let manifest_path = mod_path.join("manifest.json");
-    if manifest_path.exists()
+    // Check for a Thunderstore manifest first
+    if let Some(manifest_path) = thunderstore_manifest_path(mod_path)
         && let Some(detected_mod) = parse_thunderstore_manifest(&manifest_path, mod_path)?
     {
         // If this is Steamodded, return it immediately
@@ -2834,6 +2907,85 @@ mod tests {
         assert_eq!(ts.namespace, None);
         assert_eq!(ts.full_name, None);
         assert_eq!(ts.name, "WheelOfFortuneTracker");
+    }
+
+    const JD_MANIFEST: &str = r#"{"name": "JokerDisplay", "version_number": "1.8.4", "website_url": "https://github.com/nh6574/JokerDisplay", "description": "Displays info", "dependencies": ["Steamodded-Steamodded-1.0.0"]}"#;
+
+    #[test]
+    fn detects_stored_thunderstore_manifest_first() {
+        let td = tempdir().unwrap();
+        let mod_dir = td.path().join("nh6574-JokerDisplay");
+        std::fs::create_dir_all(&mod_dir).unwrap();
+        std::fs::write(mod_dir.join(THUNDERSTORE_MANIFEST_FILE), JD_MANIFEST).unwrap();
+        std::fs::write(mod_dir.join("main.lua"), "-- jd").unwrap();
+
+        let detected = detect_mod_in_directory(&mod_dir)
+            .unwrap()
+            .expect("detected");
+        let ts = detected.thunderstore.expect("thunderstore identity");
+        assert_eq!(ts.full_name.as_deref(), Some("nh6574-JokerDisplay"));
+        assert_eq!(ts.version.as_deref(), Some("1.8.4"));
+
+        // The stored copy wins over a manifest.json left next to it
+        std::fs::write(
+            mod_dir.join("manifest.json"),
+            JD_MANIFEST.replace("1.8.4", "1.0.0"),
+        )
+        .unwrap();
+        assert_eq!(
+            thunderstore_manifest_path(&mod_dir),
+            Some(mod_dir.join(THUNDERSTORE_MANIFEST_FILE))
+        );
+        let manifest = read_mod_dir_manifest(&mod_dir).expect("manifest");
+        assert_eq!(manifest.version_number.as_deref(), Some("1.8.4"));
+
+        // manifest.json alone still counts, r2modman and manual installs keep it
+        std::fs::remove_file(mod_dir.join(THUNDERSTORE_MANIFEST_FILE)).unwrap();
+        let manifest = read_mod_dir_manifest(&mod_dir).expect("manifest");
+        assert_eq!(manifest.version_number.as_deref(), Some("1.0.0"));
+    }
+
+    #[test]
+    fn thunderstore_manifest_shape_check() {
+        assert!(is_thunderstore_manifest_for(JD_MANIFEST, "JokerDisplay"));
+        assert!(is_thunderstore_manifest_for(JD_MANIFEST, "jokerdisplay"));
+        assert!(is_thunderstore_manifest_for(
+            &format!("\u{feff}{}", JD_MANIFEST.replace("]}", "],}")),
+            "JokerDisplay"
+        ));
+        assert!(!is_thunderstore_manifest_for(JD_MANIFEST, "Other"));
+        // Missing upload fields
+        assert!(!is_thunderstore_manifest_for(
+            r#"{"name": "JokerDisplay", "version_number": "1.0.0"}"#,
+            "JokerDisplay"
+        ));
+        // Steamodded metadata never counts even with every Thunderstore field
+        let smods = JD_MANIFEST.replace("{", r#"{"id": "JokerDisplay", "#);
+        assert!(!is_thunderstore_manifest_for(&smods, "JokerDisplay"));
+        assert!(!is_thunderstore_manifest_for("not json", "JokerDisplay"));
+        assert!(!is_thunderstore_manifest_for("[]", "JokerDisplay"));
+    }
+
+    #[test]
+    fn stash_thunderstore_manifest_renames_once() {
+        let td = tempdir().unwrap();
+        let mod_dir = td.path().join("nh6574-JokerDisplay");
+        std::fs::create_dir_all(&mod_dir).unwrap();
+        std::fs::write(mod_dir.join("manifest.json"), JD_MANIFEST).unwrap();
+
+        assert!(stash_thunderstore_manifest(&mod_dir, "JokerDisplay").unwrap());
+        assert!(!mod_dir.join("manifest.json").exists());
+        assert_eq!(
+            std::fs::read_to_string(mod_dir.join(THUNDERSTORE_MANIFEST_FILE)).unwrap(),
+            JD_MANIFEST
+        );
+        assert!(!stash_thunderstore_manifest(&mod_dir, "JokerDisplay").unwrap());
+
+        let own = td.path().join("Own");
+        std::fs::create_dir_all(&own).unwrap();
+        std::fs::write(own.join("manifest.json"), r#"{"id": "Own", "name": "Own"}"#).unwrap();
+        assert!(!stash_thunderstore_manifest(&own, "Own").unwrap());
+        assert!(own.join("manifest.json").exists());
     }
 
     #[test]
