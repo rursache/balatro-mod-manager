@@ -1,25 +1,8 @@
 # [![Balatro Mod Manager](images/title.svg)](#)
 
-> [!WARNING]
-> **This project has been discontinued.** I no longer have the time to maintain it, so the servers behind Balatro Mod Manager are being shut down and this repository is archived. Features that rely on those servers will stop working.
->
-> Looking for an alternative? Try [r2modman](https://thunderstore.io/c/balatro/p/ebkr/r2modman/) or [imm](https://codeberg.org/balafrost/imm) (Balatro Mod Manager, but in-game).
->
-> The code stays open source under its license. If you want to continue the project, feel free to fork it. Thanks to everyone who used it and contributed!
+Balatro Mod Manager is a standalone tool made for [Balatro](https://store.steampowered.com/app/2379780/Balatro/) that makes finding, downloading, and installing mods easy
 
-The Balatro Mod Manager by _Skyline_.
-
-Balatro Mod Manager is a standalone tool made for [Balatro](https://store.steampowered.com/app/2379780/Balatro/) that makes finding, downloading, and installing mods easy.
-
-<p align="center">
-    <a href="https://star-history.com/#skyline69/balatro-mod-manager&Date">
-        <picture>
-            <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=skyline69/balatro-mod-manager&type=Date&theme=dark" />
-            <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=skyline69/balatro-mod-manager&type=Date" />
-            <img width="75%" alt="Star History Chart" src="https://api.star-history.com/svg?repos=skyline69/balatro-mod-manager&type=Date" />
-        </picture>
-    </a>
-</p>
+Maintained by [Radu Ursache](https://radu.ursache.ro) ([@rursache](https://github.com/rursache)). Originally created by Efe "Skyline" ([@skyline69](https://github.com/skyline69))
 
 ![GitHub Downloads (all assets, all releases)](https://img.shields.io/github/downloads/rursache/balatro-mod-manager/total)
 ![GitHub License](https://img.shields.io/github/license/rursache/balatro-mod-manager)
@@ -31,6 +14,26 @@ Balatro Mod Manager is a standalone tool made for [Balatro](https://store.steamp
 ![Fortran](https://img.shields.io/badge/Fortran-%23734F96.svg?logo=fortran&logoColor=white)
 ![Tauri](https://img.shields.io/badge/tauri-%2324C8DB.svg?logo=tauri&logoColor=%23FFFFFF)
 ![Svelte](https://img.shields.io/badge/svelte-%23f1413d.svg?logo=svelte&logoColor=white)
+
+## About this fork
+
+The original Balatro Mod Manager by Efe "Skyline" was discontinued and its servers were shut down. Radu Ursache picked it up and keeps it going in this fork
+
+- The mod catalog now comes straight from [kasimeka/balatro-mod-index](https://github.com/kasimeka/balatro-mod-index), so it no longer depends on the old servers
+- Thunderstore support is coming
+- Releases, issues and updates live in [rursache/balatro-mod-manager](https://github.com/rursache/balatro-mod-manager)
+
+Mods are listed by submitting them to the [index repository](https://github.com/kasimeka/balatro-mod-index), see [CONTRIBUTING.md](CONTRIBUTING.md)
+
+<p align="center">
+    <a href="https://star-history.com/#rursache/balatro-mod-manager&Date">
+        <picture>
+            <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=rursache/balatro-mod-manager&type=Date&theme=dark" />
+            <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=rursache/balatro-mod-manager&type=Date" />
+            <img width="75%" alt="Star History Chart" src="https://api.star-history.com/svg?repos=rursache/balatro-mod-manager&type=Date" />
+        </picture>
+    </a>
+</p>
 
 # [![Download](images/download.svg)](https://github.com/rursache/balatro-mod-manager/releases/latest)
 
@@ -54,18 +57,18 @@ The macOS build is signed ad-hoc (not notarized by Apple), so Gatekeeper blocks 
 2. Try to open it. macOS will refuse with either *"Apple cannot verify..."* or *"is damaged and can't be opened"*. Close the dialog.
 3. Pick one of the following bypasses:
 
-   **Option A — System Settings (macOS 14 and newer, no Terminal):**
+   **Option A, System Settings (macOS 14 and newer, no Terminal):**
    - Open **System Settings → Privacy & Security**.
    - Scroll to the **Security** section. You should see a line about Balatro Mod Manager being blocked, with an **Open Anyway** button. Click it and confirm.
    - If no button appears (macOS 15+ sometimes hides it for "damaged" bundles), use Option B.
 
-   **Option B — Terminal one-liner (works on every macOS version):**
+   **Option B, Terminal one-liner (works on every macOS version):**
    ```bash
    xattr -dr com.apple.quarantine "/Applications/Balatro Mod Manager.app"
    ```
    Then double-click the app normally.
 
-   **Option C — Older macOS (13 and below):** right-click the app → **Open** → confirm in the dialog.
+   **Option C, older macOS (13 and below):** right-click the app → **Open** → confirm in the dialog.
 
 Why this happens: shipping notarized builds requires an active Apple Developer Program membership ($99/year). The app is ad-hoc signed so it runs on Apple Silicon, but Apple's notarization service is what would silence Gatekeeper. The friction is one-time per install.
 
@@ -222,9 +225,12 @@ To clean the build files, use the provided taskfile:
    task clean
    ```
 
-> Font by Daniel Linssen
+## Credits
 
+- Efe "Skyline" ([@skyline69](https://github.com/skyline69)) created Balatro Mod Manager and maintained it until it was discontinued. This fork builds on his work
+- The mod catalog is the community run [balatro-mod-index](https://github.com/kasimeka/balatro-mod-index)
+- Font by Daniel Linssen
 
-# Code Signing
+## License
 
-Balatro Mod Manager releases are code-signed using [SignPath](https://signpath.io) to ensure authenticity and security. This helps verify that the downloaded software hasn't been tampered with and comes from a trusted source.
+GPL-3.0, see [LICENSE](LICENSE)
