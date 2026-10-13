@@ -210,6 +210,30 @@ mod tests {
     }
 
     #[test]
+    fn ensure_strictly_inside_rejects_mods_dir_and_escapes() {
+        let td = tempdir().unwrap();
+        let mods_dir = td.path().join("Mods");
+        let mod_dir = mods_dir.join("SomeMod");
+        std::fs::create_dir_all(&mod_dir).unwrap();
+        std::fs::create_dir_all(td.path().join("outside")).unwrap();
+
+        assert!(ensure_strictly_inside(&mod_dir, &mods_dir).is_ok());
+        for path in [
+            mods_dir.clone(),
+            mods_dir.join("."),
+            mod_dir.join(".."),
+            mods_dir.join("..").join("outside"),
+            td.path().to_path_buf(),
+        ] {
+            assert!(
+                ensure_strictly_inside(&path, &mods_dir).is_err(),
+                "{}",
+                path.display()
+            );
+        }
+    }
+
+    #[test]
     fn reindex_db_removes_missing_paths() {
         // Redirect config dir to temp
         let td = tempdir().unwrap();
@@ -267,18 +291,7 @@ pub async fn delete_manual_mod(path: String) -> Result<(), String> {
         dirs::config_dir().ok_or_else(|| "Could not find config directory".to_string())?;
     let mods_dir = config_dir.join("Balatro").join("Mods");
 
-    let canonicalized_path = tokio::fs::canonicalize(&path)
-        .await
-        .map_err(|e| format!("Failed to canonicalize path {}: {}", path.display(), e))?;
-    let canonicalized_mods_dir = tokio::fs::canonicalize(&mods_dir)
-        .await
-        .map_err(|e| format!("Failed to canonicalize mods directory: {e}"))?;
-    if !canonicalized_path.starts_with(&canonicalized_mods_dir) {
-        return Err(format!(
-            "Path is outside of the mods directory: {}",
-            path.display()
-        ));
-    }
+    ensure_strictly_inside(&path, &mods_dir)?;
 
     if metadata.unwrap().is_dir() {
         tokio::fs::remove_dir_all(&path)
@@ -288,6 +301,22 @@ pub async fn delete_manual_mod(path: String) -> Result<(), String> {
         tokio::fs::remove_file(&path)
             .await
             .map_err(|e| format!("Failed to remove file: {e}"))?
+    }
+    Ok(())
+}
+
+fn ensure_strictly_inside(path: &Path, mods_dir: &Path) -> Result<(), String> {
+    let canonicalized_path = std::fs::canonicalize(path)
+        .map_err(|e| format!("Failed to canonicalize path {}: {}", path.display(), e))?;
+    let canonicalized_mods_dir = std::fs::canonicalize(mods_dir)
+        .map_err(|e| format!("Failed to canonicalize mods directory: {e}"))?;
+    if canonicalized_path == canonicalized_mods_dir
+        || !canonicalized_path.starts_with(&canonicalized_mods_dir)
+    {
+        return Err(format!(
+            "Path is outside of the mods directory: {}",
+            path.display()
+        ));
     }
     Ok(())
 }
