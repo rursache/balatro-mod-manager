@@ -86,7 +86,7 @@ jobs:
           echo "Tag $TAG, version $VERSION, prerelease $PRERELEASE, dry run $DRY_RUN" >> "$GITHUB_STEP_SUMMARY"
 
   macos:
-    name: macOS universal
+    name: macOS arm64
     needs: meta
     runs-on: macos-26
     timeout-minutes: 90
@@ -106,14 +106,14 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-apple-darwin,x86_64-apple-darwin
+          targets: aarch64-apple-darwin
 
       - uses: Swatinem/rust-cache@v2
         with:
-          key: universal
+          key: arm64
 
-      - name: Build the universal .app
-        run: BUNDLES=app scripts/build-macos.sh universal
+      - name: Build the arm64 .app
+        run: BUNDLES=app scripts/build-macos.sh arm64
 
       - name: Fetch signing toolkit
         uses: actions/checkout@v7
@@ -146,7 +146,7 @@ jobs:
         run: |
           OUT=dist/release
           mkdir -p "$OUT"
-          NAME="Balatro-Mod-Manager-$RELEASE_VERSION-macos-universal"
+          NAME="Balatro-Mod-Manager-$RELEASE_VERSION-macos-arm64"
 
           ditto -c -k --keepParent "$APP" "$OUT/$NAME.zip"
           CHECK="$RUNNER_TEMP/zip-check"

@@ -30,10 +30,10 @@ tasks:
   default:
     - task: debug
   build:macos:
-    desc: macOS .app and .dmg into dist/macos (ARCH=universal|arm64|x86_64, default universal)
+    desc: macOS .app and .dmg into dist/macos (ARCH=arm64|universal|x86_64, default arm64)
     platforms: [darwin]
     cmds:
-      - cmd: scripts/build-macos.sh {{.ARCH | default "universal"}}
+      - cmd: scripts/build-macos.sh {{.ARCH | default "arm64"}}
   build:windows:
     desc: Windows x64 installer into dist/windows (cross compiled with cargo-xwin outside Windows)
     cmds:

@@ -12,7 +12,7 @@ Balatro Mod Manager is a standalone desktop application for managing mods for th
 - **Frontend**: SvelteKit 2 + Svelte 5 + TypeScript
 - **Build Tool**: Bun (package manager), Task (task runner)
 - **Database**: SQLite (via rusqlite, bundled)
-- **Platforms**: Windows, macOS (universal binary), Linux (Flatpak)
+- **Platforms**: Windows, macOS (Apple Silicon only), Linux (Flatpak)
 
 ## Development Commands
 
@@ -35,9 +35,7 @@ task dev:web                   # Start web-only dev server (Vite, without Tauri)
 ```bash
 # Platform-specific builds (automatically selects based on OS)
 task release-windows           # Windows only
-task release-macos             # macOS universal binary (default)
-task release-macos-arm         # macOS ARM64 only
-task release-macos-x64         # macOS x86_64 only
+task build:macos               # macOS arm64 .app and .dmg into dist/macos (ARCH=universal|x86_64 also work)
 task release-linux             # Linux (produces AppImage/Deb/RPM)
 
 # Flatpak builds (Linux)
@@ -153,7 +151,7 @@ The project uses a **workspace structure** with two Rust crates:
 
 **macOS**
 
-- Universal binaries require both `aarch64-apple-darwin` and `x86_64-apple-darwin` targets
+- Releases ship arm64 only; universal builds (`scripts/build-macos.sh universal`) need both `aarch64-apple-darwin` and `x86_64-apple-darwin` targets
 - `MACOSX_DEPLOYMENT_TARGET=11.0` (minimum macOS Big Sur)
 
 **Linux**

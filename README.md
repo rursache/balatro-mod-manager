@@ -46,14 +46,14 @@ Balatro Mod Manager is available for Windows, macOS, and Linux. The installer is
 Scroll down to find **▸Assets** and download the right version of the installer for your system.
 
 - Windows: `Balatro-Mod-Manager-<version>-windows-x64-setup.exe` or `Balatro-Mod-Manager-<version>-windows-x64.msi`
-- macOS: `Balatro-Mod-Manager-<version>-macos-universal.dmg` (or the `.zip` with the app inside), or Homebrew
+- macOS: `Balatro-Mod-Manager-<version>-macos-arm64.dmg` (or the `.zip` with the app inside), or Homebrew
 - Linux: Flatpak (`Balatro-Mod-Manager-<version>-linux.flatpak`), AUR, `Balatro-Mod-Manager-<version>-linux-amd64.AppImage`, `-linux-amd64.deb` or `-linux-x86_64.rpm`
 
 Every release also ships `checksums.txt` with the SHA-256 of each asset
 
 ### Installing on macOS
 
-The macOS build is a universal app (Apple Silicon and Intel), signed with a Developer ID and notarized by Apple, so it opens without any Gatekeeper workaround
+The macOS build is for Apple Silicon (Intel Macs are not supported), signed with a Developer ID and notarized by Apple, so it opens without any Gatekeeper workaround
 
 - Homebrew:
   ```bash
@@ -197,7 +197,7 @@ Every platform has one script in `scripts/` that writes its artifacts to `dist/<
 
 | Task | Script | Output | Host requirements |
 |---|---|---|---|
-| `task build:macos` (`ARCH=universal\|arm64\|x86_64`) | `scripts/build-macos.sh` | `.dmg` and zipped `.app` | macOS with Xcode, `rustup target add aarch64-apple-darwin x86_64-apple-darwin` |
+| `task build:macos` (`ARCH=arm64\|universal\|x86_64`, default arm64) | `scripts/build-macos.sh` | `.dmg` and zipped `.app` | macOS with Xcode, `rustup target add aarch64-apple-darwin` (plus `x86_64-apple-darwin` for universal or Intel builds) |
 | `task build:windows` | `scripts/build-windows.sh` | NSIS `-setup.exe` (plus `.msi` on Windows) | Windows natively, or macOS/Linux with `rustup target add x86_64-pc-windows-msvc`, `cargo install --locked cargo-xwin`, LLVM, LLD and NSIS (`brew install llvm lld makensis`) |
 | `task build:linux` | `scripts/build-linux.sh` | `.deb`, `.AppImage`, `.rpm` | Docker (OrbStack or Docker Desktop on macOS), the image comes from `packaging/Dockerfile` |
 | `task build:all` | all of the above | everything | macOS with all of the above |
@@ -206,7 +206,7 @@ Builds are ad hoc signed on macOS and unsigned on Windows. Set `APPLE_SIGNING_ID
 
 The version shown in the app comes from git: the tag on `HEAD` (without the leading `v`), otherwise the short commit hash, otherwise `dev`. `BMM_VERSION=1.2.3` overrides it. Only tagged builds check GitHub for app updates
 
-`RELEASE_VERSION=1.2.3` switches the scripts to release mode: the bundle version and the in app version become `1.2.3` and the artifacts get release names like `Balatro-Mod-Manager-1.2.3-macos-universal.dmg`. Without it the bundle keeps the static version from `tauri.conf.json` and Tauri's default file names
+`RELEASE_VERSION=1.2.3` switches the scripts to release mode: the bundle version and the in app version become `1.2.3` and the artifacts get release names like `Balatro-Mod-Manager-1.2.3-macos-arm64.dmg`. Without it the bundle keeps the static version from `tauri.conf.json` and Tauri's default file names
 
 ### Publishing a release
 

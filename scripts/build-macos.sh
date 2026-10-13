@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Builds the macOS .app and .dmg into dist/macos
-# Usage: scripts/build-macos.sh [universal|arm64|x86_64]   (default: universal)
+# Usage: scripts/build-macos.sh [arm64|universal|x86_64]   (default: arm64, releases ship arm64 only)
 # Signing: set APPLE_SIGNING_IDENTITY (and APPLE_ID/APPLE_PASSWORD/APPLE_TEAM_ID to notarize), otherwise ad hoc
 # SKIP_FRONTEND=1 reuses an existing ./build instead of running the frontend build
 # BUNDLES=app only builds the .app and copies it to dist/macos (CI signs and packages it afterwards)
@@ -10,7 +10,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # shellcheck source=scripts/common.sh
 source "$ROOT/scripts/common.sh"
-ARCH="${1:-universal}"
+ARCH="${1:-arm64}"
 OUT="$ROOT/dist/macos"
 BUNDLES="${BUNDLES:-app,dmg}"
 

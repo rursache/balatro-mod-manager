@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # Sourced by the build-*.sh scripts
 # RELEASE_VERSION=1.2.3 (or v1.2.3) switches on release mode: the bundle version and the in app
-# version come from it and artifacts get names like Balatro-Mod-Manager-1.2.3-macos-universal.dmg
+# version come from it and artifacts get names like Balatro-Mod-Manager-1.2.3-macos-arm64.dmg
 # Without it the build keeps Tauri's default artifact names and the app shows the git tag or commit
 
 ASSET_PREFIX="Balatro-Mod-Manager"
@@ -31,7 +31,7 @@ tauri_config_json() {
   fi
 }
 
-# Release asset name for a platform suffix, e.g. asset_name macos-universal.dmg
+# Release asset name for a platform suffix, e.g. asset_name macos-arm64.dmg
 asset_name() {
   printf '%s-%s-%s' "$ASSET_PREFIX" "$RELEASE_VERSION" "$1"
 }
