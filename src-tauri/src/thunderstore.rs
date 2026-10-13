@@ -24,6 +24,8 @@ pub const LOVELY_PACKAGE: &str = "Thunderstore-lovely";
 pub const STEAMODDED_PACKAGE: &str = "Steamodded-Steamodded";
 /// Deprecated upload of the old 0.8/0.9 Steamodded API
 pub const LEGACY_STEAMODDED_PACKAGE: &str = "Steamopollys-Steamodded";
+/// Standalone mod managers uploaded to the community, they are apps and not Balatro mods
+pub const NON_MOD_PACKAGES: &[&str] = &["ebkr-r2modman", "Kesomannen-GaleModManager"];
 pub const CACHE_FILE: &str = "thunderstore_balatro_v1.json";
 
 const CACHE_SCHEMA: u32 = 1;
@@ -285,6 +287,29 @@ pub fn icon_url(pkg: &TsPackage) -> String {
 
 pub fn is_multiplayer(pkg: &TsPackage) -> bool {
     pkg.owner.eq_ignore_ascii_case(MULTIPLAYER_NAMESPACE)
+}
+
+/// Listed mod managers, plus any package that calls itself a mod manager without being
+/// tagged `Mods` or depending on anything (every Lua mod at least needs Lovely)
+pub fn is_non_mod(pkg: &TsPackage) -> bool {
+    if NON_MOD_PACKAGES
+        .iter()
+        .any(|n| pkg.full_name.trim().eq_ignore_ascii_case(n))
+    {
+        return true;
+    }
+    let Some(latest) = latest_active_version(pkg) else {
+        return false;
+    };
+    latest.dependencies.is_empty()
+        && !pkg
+            .categories
+            .iter()
+            .any(|c| c.trim().eq_ignore_ascii_case("Mods"))
+        && latest
+            .description
+            .to_ascii_lowercase()
+            .contains("mod manager")
 }
 
 pub fn is_lovely(full_name: &str) -> bool {
@@ -830,6 +855,85 @@ pub(crate) mod tests {
 
     fn pkg<'a>(packages: &'a [TsPackage], full_name: &str) -> &'a TsPackage {
         find_package(packages, full_name).expect(full_name)
+    }
+
+    pub fn package(
+        full_name: &str,
+        categories: &[&str],
+        description: &str,
+        deps: &[&str],
+    ) -> TsPackage {
+        let (owner, name) = full_name.split_once('-').unwrap();
+        TsPackage {
+            name: name.into(),
+            full_name: full_name.into(),
+            owner: owner.into(),
+            categories: categories.iter().map(|c| c.to_string()).collect(),
+            versions: vec![TsVersion {
+                version_number: "1.0.0".into(),
+                description: description.into(),
+                dependencies: deps.iter().map(|d| d.to_string()).collect(),
+                is_active: true,
+                ..Default::default()
+            }],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn mod_managers_are_not_mods() {
+        let r2 = package(
+            "ebkr-r2modman",
+            &["Tools"],
+            "A simple and easy to use mod manager for many games using Thunderstore",
+            &[],
+        );
+        let gale = package(
+            "Kesomannen-GaleModManager",
+            &[],
+            "A modern and lightweight alternative mod manager for Thunderstore.",
+            &[],
+        );
+        let other = package(
+            "Someone-SomeManager",
+            &["Tools"],
+            "Yet another Mod Manager",
+            &[],
+        );
+        assert!(is_non_mod(&r2));
+        assert!(is_non_mod(&gale));
+        assert!(is_non_mod(&other));
+
+        let lua = [
+            package(
+                "SirMaiquis-TagManager",
+                &["Mods"],
+                "Tag Manager is a mod to control tags in the game",
+                &["Steamodded-Steamodded-1.0.0"],
+            ),
+            package(
+                "crimsonseraphim-Penumbra",
+                &["Audio", "Misc"],
+                "A music manager mod",
+                &[],
+            ),
+            package(
+                "Someone-Tagged",
+                &["Mods", "Tools"],
+                "An in-game mod manager menu",
+                &[],
+            ),
+            package(
+                "Someone-WithDeps",
+                &["Tools"],
+                "A mod manager inside Balatro",
+                &["Thunderstore-lovely-0.9.0"],
+            ),
+        ];
+        for p in &lua {
+            assert!(!is_non_mod(p), "{}", p.full_name);
+        }
+        assert!(fixture_packages().iter().all(|p| !is_non_mod(p)));
     }
 
     #[test]

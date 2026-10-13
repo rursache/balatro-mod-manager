@@ -246,7 +246,8 @@ fn attach(item: &mut ArchiveModItem, pkg: &TsPackage) -> bool {
 }
 
 /// One entry per mod: repo URL match first, then compacted name plus owner equal to the
-/// index author. Deprecated packages are never merged, Lovely is never listed, Steamodded
+/// index author. Deprecated packages are never merged, Lovely and mod managers are never
+/// listed, Steamodded
 /// packages alias the index Steamodded entry and Multiplayer packages are left to their
 /// own section
 pub fn merge(index: Vec<ArchiveModItem>, packages: &[TsPackage]) -> Vec<ArchiveModItem> {
@@ -266,7 +267,10 @@ pub fn merge(index: Vec<ArchiveModItem>, packages: &[TsPackage]) -> Vec<ArchiveM
     let mut claimed: HashSet<usize> = HashSet::new();
     let mut ts_only: Vec<ArchiveModItem> = Vec::new();
     for pkg in packages {
-        if thunderstore::is_lovely(&pkg.full_name) || thunderstore::is_multiplayer(pkg) {
+        if thunderstore::is_lovely(&pkg.full_name)
+            || thunderstore::is_multiplayer(pkg)
+            || thunderstore::is_non_mod(pkg)
+        {
             continue;
         }
         if thunderstore::is_steamodded(&pkg.full_name) {
@@ -585,7 +589,7 @@ pub async fn resolve_install_url(url: &str) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::thunderstore::tests::fixture_packages;
+    use crate::thunderstore::tests::{fixture_packages, package};
 
     fn index_item(dir: &str, title: &str, author: &str, repo: &str) -> ArchiveModItem {
         ArchiveModItem {
@@ -752,6 +756,28 @@ mod tests {
         // Without an index entry Steamodded is not listed at all
         let items = merge(Vec::new(), &fixture_packages());
         assert!(items.iter().all(|i| !i.meta.title.contains("Steamodded")));
+    }
+
+    #[test]
+    fn merge_leaves_out_mod_managers() {
+        let mut packages = fixture_packages();
+        packages.push(package(
+            "ebkr-r2modman",
+            &["Tools"],
+            "A simple and easy to use mod manager for many games using Thunderstore",
+            &[],
+        ));
+        packages.push(package(
+            "Kesomannen-GaleModManager",
+            &[],
+            "A modern and lightweight alternative mod manager for Thunderstore.",
+            &[],
+        ));
+        let before = merge(index_fixture(), &fixture_packages()).len();
+        let items = merge(index_fixture(), &packages);
+        assert_eq!(items.len(), before);
+        assert!(by_id(&items, "ts:ebkr-r2modman").is_none());
+        assert!(by_id(&items, "ts:Kesomannen-GaleModManager").is_none());
     }
 
     #[test]
