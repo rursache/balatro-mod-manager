@@ -110,7 +110,6 @@
   import { mapCategories } from "../../utils/categories";
   import {
     catalogSourceFields,
-    uniqueCatalogTitles,
     usesCatalogInstall,
     type ArchiveModItem,
   } from "../../utils/catalogItems";
@@ -1283,10 +1282,9 @@
     items: ArchiveModItem[],
     cachedMap?: Record<string, string>,
   ): Mod[] {
-    const titles = uniqueCatalogTitles(items);
     return items.map((item) => {
       const fields = catalogSourceFields(item);
-      const title = titles.get(item.dir_name) ?? item.meta.title;
+      const title = item.meta.title;
       // Thumbnails are keyed by catalog id, index art cached before that is keyed by title
       const cachedThumb =
         cachedMap?.[item.dir_name] ??

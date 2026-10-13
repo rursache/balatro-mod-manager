@@ -306,7 +306,48 @@ pub fn merge(index: Vec<ArchiveModItem>, packages: &[TsPackage]) -> Vec<ArchiveM
 
     items.extend(ts_only);
     mod_index::sort_items(&mut items);
+    disambiguate_titles(&mut items);
     items
+}
+
+/// Titles are the frontend's mod key and the name of the installed row, so a Thunderstore
+/// only package sharing a title with another entry is listed as "Title (Namespace)". The
+/// index entry keeps the plain title, else the package that sorts first by id
+fn disambiguate_titles(items: &mut [ArchiveModItem]) {
+    let mut groups: HashMap<String, Vec<usize>> = HashMap::new();
+    for (pos, item) in items.iter().enumerate() {
+        let key = compact(&item.meta.title);
+        if !key.is_empty() {
+            groups.entry(key).or_default().push(pos);
+        }
+    }
+    for positions in groups.values().filter(|p| p.len() > 1) {
+        let owner = positions
+            .iter()
+            .copied()
+            .find(|&p| items[p].source != CatalogSource::Thunderstore)
+            .or_else(|| {
+                positions
+                    .iter()
+                    .copied()
+                    .min_by(|&a, &b| items[a].dir_name.cmp(&items[b].dir_name))
+            });
+        for &pos in positions {
+            if Some(pos) == owner || items[pos].source != CatalogSource::Thunderstore {
+                continue;
+            }
+            let Some(namespace) = items[pos]
+                .thunderstore
+                .as_ref()
+                .map(|t| t.namespace.clone())
+                .filter(|n| !n.is_empty())
+            else {
+                continue;
+            };
+            let title = &mut items[pos].meta.title;
+            *title = format!("{title} ({namespace})");
+        }
+    }
 }
 
 /// Official Multiplayer packages, kept out of the general catalog
@@ -631,6 +672,7 @@ mod tests {
         // repo matches Sonfive@PokermonPlus which must stay unmerged too
         let plus = by_id(&items, "ts:PokermonPlus-Pokermon").expect("standalone");
         assert_eq!(plus.source, CatalogSource::Thunderstore);
+        assert_eq!(plus.meta.title, "Pokermon (PokermonPlus)");
         assert!(plus.thunderstore.as_ref().unwrap().deprecated);
         let sonfive = by_id(&items, "Sonfive@PokermonPlus").unwrap();
         assert_eq!(sonfive.source, CatalogSource::Index);
@@ -713,6 +755,46 @@ mod tests {
         );
         let ts = by_id(&items, "ts:SuperDZ555-balatro_horse_mod").expect("standalone");
         assert!(ts.thunderstore.as_ref().unwrap().deprecated);
+    }
+
+    #[test]
+    fn colliding_thunderstore_titles_get_their_namespace() {
+        let mut packages = fixture_packages();
+        let mut other = thunderstore::find_package(&packages, "nh6574-JokerDisplay")
+            .unwrap()
+            .clone();
+        other.full_name = "Another-JokerDisplay".into();
+        other.owner = "Another".into();
+        packages.push(other);
+
+        let items = merge(Vec::new(), &packages);
+        assert_eq!(
+            by_id(&items, "ts:Another-JokerDisplay").unwrap().meta.title,
+            "JokerDisplay"
+        );
+        assert_eq!(
+            by_id(&items, "ts:nh6574-JokerDisplay").unwrap().meta.title,
+            "JokerDisplay (nh6574)"
+        );
+
+        // An index entry always keeps the plain title
+        let index = vec![index_item(
+            "Someone@JokerDisplay",
+            "Joker Display",
+            "Someone",
+            "",
+        )];
+        let items = merge(index, &packages);
+        assert_eq!(
+            by_id(&items, "Someone@JokerDisplay").unwrap().meta.title,
+            "Joker Display"
+        );
+        for (id, title) in [
+            ("ts:Another-JokerDisplay", "JokerDisplay (Another)"),
+            ("ts:nh6574-JokerDisplay", "JokerDisplay (nh6574)"),
+        ] {
+            assert_eq!(by_id(&items, id).unwrap().meta.title, title);
+        }
     }
 
     #[test]

@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
   catalogSourceFields,
-  uniqueCatalogTitles,
   usesCatalogInstall,
   type ArchiveModItem,
 } from "./catalogItems";
@@ -45,49 +44,6 @@ const item = (
   description: "",
   image_url: "",
   ...extra,
-});
-
-describe("uniqueCatalogTitles", () => {
-  it("suffixes Thunderstore only packages that collide with another entry", () => {
-    const titles = uniqueCatalogTitles([
-      item("InertSteak@Pokermon", "Pokermon", {
-        source: "merged",
-        thunderstore: tsInfo("InertSteak-Pokermon"),
-      }),
-      item("ts:PokermonPlus-Pokermon", "Pokermon", {
-        source: "thunderstore",
-        thunderstore: tsInfo("PokermonPlus-Pokermon"),
-      }),
-      item("ts:nh6574-JokerDisplay", "JokerDisplay", {
-        source: "thunderstore",
-        thunderstore: tsInfo("nh6574-JokerDisplay"),
-      }),
-    ]);
-    expect(titles.get("InertSteak@Pokermon")).toBe("Pokermon");
-    expect(titles.get("ts:PokermonPlus-Pokermon")).toBe(
-      "Pokermon (PokermonPlus)",
-    );
-    expect(titles.get("ts:nh6574-JokerDisplay")).toBe("JokerDisplay");
-  });
-
-  it("keeps one plain title when only packages collide", () => {
-    const titles = uniqueCatalogTitles([
-      item("ts:TheLoaf-DeBreadsRetextures", "DeBreads Retextures", {
-        source: "thunderstore",
-        thunderstore: tsInfo("TheLoaf-DeBreadsRetextures"),
-      }),
-      item("ts:DeBread-DeBreadsRetextures", "DeBreads Retextures", {
-        source: "thunderstore",
-        thunderstore: tsInfo("DeBread-DeBreadsRetextures"),
-      }),
-    ]);
-    expect(titles.get("ts:DeBread-DeBreadsRetextures")).toBe(
-      "DeBreads Retextures",
-    );
-    expect(titles.get("ts:TheLoaf-DeBreadsRetextures")).toBe(
-      "DeBreads Retextures (TheLoaf)",
-    );
-  });
 });
 
 describe("catalogSourceFields", () => {
