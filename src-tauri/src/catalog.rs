@@ -35,6 +35,8 @@ struct CatalogState {
     items: Vec<ArchiveModItem>,
     index_count: usize,
     thunderstore_count: usize,
+    /// False when the index could not be loaded and the catalog lists Thunderstore only
+    index_loaded: bool,
 }
 
 static CATALOG: Lazy<tokio::sync::Mutex<Option<CatalogState>>> =
@@ -382,6 +384,7 @@ async fn store(
     index: Result<Vec<ArchiveModItem>, String>,
     packages: Result<Vec<TsPackage>, String>,
 ) -> Result<Vec<ArchiveModItem>, String> {
+    let index_loaded = index.is_ok();
     let (index, packages) = match (index, packages) {
         (Err(a), Err(b)) => return Err(format!("{a}; {b}")),
         (index, packages) => {
@@ -398,6 +401,7 @@ async fn store(
         index_count: index.len(),
         thunderstore_count: packages.len(),
         items: merge(index, &packages),
+        index_loaded,
     };
     let items = state.items.clone();
     *CATALOG.lock().await = Some(state);
@@ -405,16 +409,28 @@ async fn store(
 }
 
 /// The merged catalog as currently known, built from the source caches (each syncs only
-/// when it has nothing cached) when no sync ran yet
+/// when it has nothing cached) when no sync ran yet or the index was missing, so index
+/// mods resolve again once the index loads
 pub async fn catalog_items() -> Result<Vec<ArchiveModItem>, String> {
     if let Some(state) = CATALOG.lock().await.as_ref()
         && !state.items.is_empty()
+        && state.index_loaded
     {
         return Ok(state.items.clone());
     }
     let (index, packages) =
         tokio::join!(mod_index::catalog_items(), thunderstore::cached_packages());
     store(index, packages).await
+}
+
+/// Whether the current catalog includes the mod index, index rows can only be judged
+/// orphaned against a catalog that has it
+pub async fn index_loaded() -> bool {
+    CATALOG
+        .lock()
+        .await
+        .as_ref()
+        .is_some_and(|s| s.index_loaded)
 }
 
 pub async fn status() -> CatalogStatus {
@@ -755,6 +771,25 @@ mod tests {
         );
         let ts = by_id(&items, "ts:SuperDZ555-balatro_horse_mod").expect("standalone");
         assert!(ts.thunderstore.as_ref().unwrap().deprecated);
+    }
+
+    #[test]
+    fn catalog_without_the_index_is_flagged() {
+        tauri::async_runtime::block_on(async {
+            let items = store(Err("offline".into()), Ok(fixture_packages()))
+                .await
+                .expect("Thunderstore alone still serves");
+            assert!(!items.is_empty());
+            assert!(!index_loaded().await);
+
+            store(Ok(index_fixture()), Ok(fixture_packages()))
+                .await
+                .unwrap();
+            assert!(index_loaded().await);
+            assert!(store(Err("a".into()), Err("b".into())).await.is_err());
+            assert!(index_loaded().await, "a failed sync keeps the last catalog");
+            *CATALOG.lock().await = None;
+        });
     }
 
     #[test]

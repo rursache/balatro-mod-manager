@@ -128,6 +128,7 @@ pub async fn reconcile_orphan_mods(
     app_handle: tauri::AppHandle,
     remote_titles: Vec<String>,
 ) -> Result<OrphanReconcileResult, String> {
+    let index_loaded = crate::catalog::index_loaded().await;
     let packages = crate::thunderstore::cached_packages_offline().await;
     let thunderstore_ids: std::collections::HashSet<String> =
         packages.iter().map(|p| p.full_name.clone()).collect();
@@ -138,10 +139,13 @@ pub async fn reconcile_orphan_mods(
 
     // Safety: skip when the remote returned nothing, or returned far fewer
     // entries than we have tracked. Mirrors frontend mergeIncomingMods guard.
+    // A catalog served without the index (GitHub down, no cache) says nothing
+    // about index mods either
     let threshold = std::cmp::max(10usize, non_orphan_count / 2);
-    if remote_titles.is_empty() || remote_titles.len() < threshold {
+    if !index_loaded || remote_titles.is_empty() || remote_titles.len() < threshold {
         log::info!(
-            "reconcile_orphan_mods: skipped (remote={}, tracked_non_orphan={}, threshold={})",
+            "reconcile_orphan_mods: skipped (index_loaded={}, remote={}, tracked_non_orphan={}, threshold={})",
+            index_loaded,
             remote_titles.len(),
             non_orphan_count,
             threshold
