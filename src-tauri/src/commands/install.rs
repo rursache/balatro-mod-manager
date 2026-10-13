@@ -10,7 +10,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::os::unix::fs::symlink;
 #[cfg(target_os = "linux")]
 use std::os::unix::process::CommandExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 use std::process::Command;
 #[cfg(target_os = "linux")]
@@ -18,6 +18,7 @@ use std::process::Stdio;
 use std::time::Duration;
 
 use crate::compat_helper;
+use crate::install_plan::{self, InstallPlan, InstallSource, PlanContext, PlanStep};
 use crate::state::AppState;
 use crate::util::map_error;
 #[cfg(target_os = "macos")]
@@ -33,7 +34,11 @@ use bmm_lib::lovely::{
 #[cfg(any(target_os = "windows", target_os = "linux"))]
 use bmm_lib::lovely::{ensure_win_injector, supports_vanilla_flag};
 use bmm_lib::smods_installer::{ModInstaller, ModType};
-use bmm_lib::{cache, database::InstalledMod};
+use bmm_lib::{
+    cache,
+    database::{InstalledMod, SOURCE_INDEX, SOURCE_THUNDERSTORE},
+};
+use serde::Serialize;
 #[cfg(target_os = "linux")]
 use shell_words::split as split_shell_words;
 use tauri::Emitter;
@@ -1067,9 +1072,6 @@ pub async fn install_mod(
         Some(folder_name.clone())
     };
 
-    let mut last_error: Option<String> = None;
-    let mut delay = Duration::from_millis(500);
-
     // ts:// packages go through the Thunderstore installer for its layout fixes and
     // Namespace-Name folder, so folder_name does not apply to them
     let ts_target = if url.trim().starts_with(crate::catalog::TS_URL_SCHEME) {
@@ -1082,20 +1084,32 @@ pub async fn install_mod(
         None => crate::catalog::resolve_install_url(&url).await?,
     };
 
-    for attempt in 1..=INSTALL_MAX_RETRIES {
-        let result = match &ts_target {
+    let (target, resolved_url, folder_name) = (ts_target.as_ref(), &resolved_url, &folder_name_opt);
+    let path = with_install_retries(|| async move {
+        match target {
             Some(target) => install_thunderstore_target(target).await,
-            None => bmm_lib::installer::install_mod(resolved_url.clone(), folder_name_opt.clone())
+            None => bmm_lib::installer::install_mod(resolved_url.clone(), folder_name.clone())
                 .await
                 .map_err(|e| e.to_string()),
-        };
-        match result {
-            Ok(path) => {
-                sync_compat_helper_after_mod_change(&state).await;
-                return Ok(path);
-            }
+        }
+    })
+    .await?;
+    sync_compat_helper_after_mod_change(&state).await;
+    Ok(path)
+}
+
+/// Runs an install, retrying with backoff while the host answers with a rate limit
+async fn with_install_retries<T, F, Fut>(mut install: F) -> Result<T, String>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<T, String>>,
+{
+    let mut last_error: Option<String> = None;
+    let mut delay = Duration::from_millis(500);
+    for attempt in 1..=INSTALL_MAX_RETRIES {
+        match install().await {
+            Ok(value) => return Ok(value),
             Err(error_str) => {
-                // Check if it's a rate limit error (HTTP 429)
                 if is_rate_limit_error(&error_str) && attempt < INSTALL_MAX_RETRIES {
                     log::warn!(
                         "Mod install rate limited (attempt {}/{}), retrying in {:?}",
@@ -1112,8 +1126,6 @@ pub async fn install_mod(
             }
         }
     }
-
-    // All retries exhausted
     Err(last_error.unwrap_or_else(|| "Mod installation failed after retries".to_string()))
 }
 
@@ -1163,58 +1175,520 @@ pub async fn add_installed_mod(
     dependencies: Vec<String>,
     current_version: String,
 ) -> Result<(), String> {
+    let current_version = (!current_version.is_empty()).then_some(current_version);
     // Callers only record a mod after its install succeeded, so the folder the
-    // previous row pointed at is now stale and safe to clean up below
-    let (previous_path, protected_paths) = {
-        let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
-        let installed = map_error(db.get_installed_mods())?;
-        let previous_path = installed
-            .iter()
-            .find(|m| m.name == name)
-            .map(|m| PathBuf::from(&m.path));
-        let protected_paths: Vec<PathBuf> = installed
-            .iter()
-            .filter(|m| m.name != name && !m.path.trim().is_empty())
-            .map(|m| PathBuf::from(&m.path))
-            .collect();
-        let current_version = if current_version.is_empty() {
-            None
-        } else {
-            Some(current_version)
-        };
-        map_error(db.add_installed_mod(&name, &path, &dependencies, current_version))?;
-        (previous_path, protected_paths)
-    };
-
-    let mods_dirs = local_mod_detection::mod_dir_candidates()
-        .or_else(|_| local_mod_detection::resolve_mods_dir_path().map(|p| vec![p]))
-        .unwrap_or_default();
-    if !mods_dirs.is_empty() {
-        let cleanup_name = name.clone();
-        let new_path = PathBuf::from(&path);
-        let cleanup = tauri::async_runtime::spawn_blocking(move || {
-            bmm_lib::installer::cleanup_replaced_install(
-                &cleanup_name,
-                previous_path.as_deref(),
-                &new_path,
-                &mods_dirs,
-                &protected_paths,
-            )
-        })
-        .await;
-        match cleanup {
-            Ok(removed) if !removed.is_empty() => {
-                log::info!("Removed {} stale install(s) of {name}", removed.len());
-                sync_compat_helper_after_mod_change(&state).await;
-            }
-            Ok(_) => {}
-            Err(e) => log::warn!("Cleanup after installing {name} failed: {e}"),
-        }
+    // previous row pointed at is now stale and safe to clean up
+    let mods_dirs = installed_mods_dirs();
+    let (_, removed) = record_install(
+        &state.db,
+        &name,
+        Path::new(&path),
+        &dependencies,
+        current_version,
+        RecordKind::Index,
+        &mods_dirs,
+    )
+    .await?;
+    if removed > 0 {
+        sync_compat_helper_after_mod_change(&state).await;
     }
 
     refresh_mod_detection_cache();
     emit_installed_mods_changed(&app_handle, vec![name], Vec::new());
     Ok(())
+}
+
+fn installed_mods_dirs() -> Vec<PathBuf> {
+    local_mod_detection::mod_dir_candidates()
+        .or_else(|_| local_mod_detection::resolve_mods_dir_path().map(|p| vec![p]))
+        .unwrap_or_default()
+}
+
+/// How an install is written to the database
+#[derive(Debug, Clone, Copy)]
+enum RecordKind<'a> {
+    /// Index install that replaces the row with the same name
+    Index,
+    /// Thunderstore package, updates the row tracking `source_id` or adds one
+    Thunderstore { source_id: &'a str },
+    /// Moves the existing row `name` to another source and keeps its name
+    Switch {
+        name: &'a str,
+        source: &'a str,
+        source_id: Option<&'a str>,
+    },
+}
+
+/// Records an install, then removes the folder the row pointed at before when the new
+/// install lives elsewhere. Returns the row name used and how many folders were removed
+async fn record_install(
+    db: &std::sync::Mutex<bmm_lib::database::Database>,
+    name: &str,
+    path: &Path,
+    dependencies: &[String],
+    current_version: Option<String>,
+    kind: RecordKind<'_>,
+    mods_dirs: &[PathBuf],
+) -> Result<(String, usize), String> {
+    let path_str = path.to_string_lossy().to_string();
+    let (recorded, previous_path, protected_paths) = {
+        let db = db.lock().unwrap_or_else(|e| e.into_inner());
+        let installed = map_error(db.get_installed_mods())?;
+        let (recorded, previous) = match kind {
+            RecordKind::Index => {
+                let previous = installed.iter().find(|m| m.name == name);
+                map_error(db.add_installed_mod(name, &path_str, dependencies, current_version))?;
+                (name.to_string(), previous)
+            }
+            RecordKind::Thunderstore { source_id } => {
+                let previous = installed.iter().find(|m| {
+                    m.source == SOURCE_THUNDERSTORE
+                        && m.source_id
+                            .as_deref()
+                            .is_some_and(|id| id.eq_ignore_ascii_case(source_id))
+                });
+                let recorded = map_error(db.add_installed_mod_with_source(
+                    name,
+                    &path_str,
+                    dependencies,
+                    current_version,
+                    SOURCE_THUNDERSTORE,
+                    Some(source_id),
+                ))?;
+                (recorded, previous)
+            }
+            RecordKind::Switch {
+                name: row,
+                source,
+                source_id,
+            } => {
+                let previous = installed.iter().find(|m| m.name == row);
+                map_error(db.switch_installed_mod_source(
+                    row,
+                    &path_str,
+                    dependencies,
+                    current_version,
+                    source,
+                    source_id,
+                ))?;
+                (row.to_string(), previous)
+            }
+        };
+        let previous_path = previous.map(|m| PathBuf::from(&m.path));
+        let protected_paths: Vec<PathBuf> = installed
+            .iter()
+            .filter(|m| m.name != recorded && !m.path.trim().is_empty())
+            .map(|m| PathBuf::from(&m.path))
+            .collect();
+        (recorded, previous_path, protected_paths)
+    };
+
+    if mods_dirs.is_empty() {
+        return Ok((recorded, 0));
+    }
+    let cleanup_name = recorded.clone();
+    let new_path = path.to_path_buf();
+    let mods_dirs = mods_dirs.to_vec();
+    let cleanup = tauri::async_runtime::spawn_blocking(move || {
+        bmm_lib::installer::cleanup_replaced_install(
+            &cleanup_name,
+            previous_path.as_deref(),
+            &new_path,
+            &mods_dirs,
+            &protected_paths,
+        )
+    })
+    .await;
+    let removed = match cleanup {
+        Ok(removed) => {
+            if !removed.is_empty() {
+                log::info!("Removed {} stale install(s) of {recorded}", removed.len());
+            }
+            removed.len()
+        }
+        Err(e) => {
+            log::warn!("Cleanup after installing {recorded} failed: {e}");
+            0
+        }
+    };
+    Ok((recorded, removed))
+}
+
+/// Catalog, listing and local state the planner works from
+struct PlanInputs {
+    catalog: Vec<crate::models::ArchiveModItem>,
+    packages: Vec<crate::thunderstore::TsPackage>,
+    installed: Vec<InstalledMod>,
+    lovely_version: Option<String>,
+    steamodded_installed: bool,
+    steamodded_version: Option<String>,
+    talisman_installed: bool,
+}
+
+impl PlanInputs {
+    fn context(&self) -> PlanContext<'_> {
+        PlanContext {
+            catalog: &self.catalog,
+            packages: &self.packages,
+            installed: &self.installed,
+            lovely_version: self.lovely_version.clone(),
+            steamodded_installed: self.steamodded_installed,
+            steamodded_version: self.steamodded_version.clone(),
+            talisman_installed: self.talisman_installed,
+        }
+    }
+}
+
+async fn load_plan_inputs(state: &tauri::State<'_, AppState>) -> Result<PlanInputs, String> {
+    let (catalog, packages) = tokio::join!(
+        crate::catalog::catalog_items(),
+        crate::thunderstore::cached_packages()
+    );
+    let catalog = catalog?;
+    let packages = packages.unwrap_or_else(|e| {
+        log::warn!("Planning without Thunderstore packages: {e}");
+        Vec::new()
+    });
+    let (installed, lovely_version) = {
+        let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
+        (
+            map_error(db.get_installed_mods())?,
+            db.get_lovely_version().ok().flatten(),
+        )
+    };
+    let mods_dir = local_mod_detection::resolve_mods_dir_path().ok();
+    let (steamodded_installed, steamodded_version) =
+        install_plan::installed_steamodded(&installed, mods_dir.as_deref());
+    let talisman_installed = installed
+        .iter()
+        .any(|m| m.name.eq_ignore_ascii_case("talisman") && Path::new(&m.path).exists())
+        || ModInstaller::new(ModType::Talisman).is_installed();
+    Ok(PlanInputs {
+        catalog,
+        packages,
+        installed,
+        lovely_version,
+        steamodded_installed,
+        steamodded_version,
+        talisman_installed,
+    })
+}
+
+fn parse_source(source: Option<&str>) -> Result<Option<InstallSource>, String> {
+    source
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(InstallSource::parse)
+        .transpose()
+}
+
+/// What installing a catalog entry involves: the source used, the packages to download
+/// in order, dependencies already satisfied, and the Lovely and Steamodded checks
+#[tauri::command]
+pub async fn plan_catalog_install(
+    state: tauri::State<'_, AppState>,
+    id: String,
+    version: Option<String>,
+    source: Option<String>,
+) -> Result<InstallPlan, String> {
+    let source = parse_source(source.as_deref())?;
+    let inputs = load_plan_inputs(&state).await?;
+    install_plan::plan_install(&inputs.context(), &id, version.as_deref(), source)
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct InstalledCatalogMod {
+    pub name: String,
+    pub path: PathBuf,
+    pub version: String,
+    pub source: InstallSource,
+    pub source_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CatalogInstallResult {
+    pub plan: InstallPlan,
+    pub installed: Vec<InstalledCatalogMod>,
+    pub warnings: Vec<String>,
+}
+
+/// Installs a catalog entry with its Thunderstore dependencies. With `installSteamodded`
+/// a missing or too old Steamodded is updated to the latest release first, Lovely is left
+/// to the existing update flow
+#[tauri::command]
+pub async fn install_catalog_mod(
+    state: tauri::State<'_, AppState>,
+    app_handle: tauri::AppHandle,
+    id: String,
+    version: Option<String>,
+    source: Option<String>,
+    install_steamodded: Option<bool>,
+) -> Result<CatalogInstallResult, String> {
+    let source = parse_source(source.as_deref())?;
+    let plan = {
+        let inputs = load_plan_inputs(&state).await?;
+        install_plan::plan_install(&inputs.context(), &id, version.as_deref(), source)?
+    };
+    let mods_dirs = installed_mods_dirs();
+    let mut run = PlanRun {
+        installed: Vec::new(),
+        warnings: plan.warnings.clone(),
+        removed: 0,
+    };
+    let result = run_plan(
+        &state.db,
+        &plan,
+        install_steamodded.unwrap_or(false),
+        &mods_dirs,
+        &mut run,
+    )
+    .await;
+
+    if !run.installed.is_empty() || run.removed > 0 {
+        sync_compat_helper_after_mod_change(&state).await;
+        refresh_mod_detection_cache();
+        emit_installed_mods_changed(
+            &app_handle,
+            run.installed.iter().map(|m| m.name.clone()).collect(),
+            Vec::new(),
+        );
+    }
+    for warning in &run.warnings {
+        log::warn!("Installing {}: {warning}", plan.mod_title);
+    }
+    result?;
+    Ok(CatalogInstallResult {
+        plan,
+        installed: run.installed,
+        warnings: run.warnings,
+    })
+}
+
+struct PlanRun {
+    installed: Vec<InstalledCatalogMod>,
+    warnings: Vec<String>,
+    removed: usize,
+}
+
+async fn run_plan(
+    db: &std::sync::Mutex<bmm_lib::database::Database>,
+    plan: &InstallPlan,
+    install_steamodded: bool,
+    mods_dirs: &[PathBuf],
+    run: &mut PlanRun,
+) -> Result<(), String> {
+    if install_steamodded && plan.steamodded.as_ref().is_some_and(|s| !s.satisfied) {
+        install_steamodded_release(db, "", mods_dirs, run).await?;
+    }
+
+    let mut names_by_package: std::collections::HashMap<String, String> = plan
+        .satisfied
+        .iter()
+        .map(|s| (s.full_name.to_ascii_lowercase(), s.tracked_name.clone()))
+        .collect();
+
+    for step in &plan.steps {
+        match step.source {
+            InstallSource::Index if step.catalog_id == crate::catalog::STEAMODDED_ID => {
+                install_steamodded_release(db, &step.version, mods_dirs, run).await?;
+            }
+            InstallSource::Index => install_index_step(db, step, mods_dirs, run).await?,
+            InstallSource::Thunderstore => {
+                if let Some((full_name, name)) =
+                    install_thunderstore_step(db, step, &names_by_package, mods_dirs, run).await?
+                {
+                    names_by_package.insert(full_name.to_ascii_lowercase(), name);
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+async fn install_steamodded_release(
+    db: &std::sync::Mutex<bmm_lib::database::Database>,
+    tag: &str,
+    mods_dirs: &[PathBuf],
+    run: &mut PlanRun,
+) -> Result<(), String> {
+    let installer = ModInstaller::new(ModType::Steamodded);
+    let tag = if tag.trim().is_empty() {
+        installer
+            .get_latest_release()
+            .await
+            .map_err(|e| e.to_string())?
+    } else {
+        tag.trim().to_string()
+    };
+    let installer = &installer;
+    let tag_ref = tag.as_str();
+    let path = with_install_retries(|| async move {
+        installer
+            .install_version(tag_ref)
+            .await
+            .map_err(|e| e.to_string())
+    })
+    .await?;
+    let path = PathBuf::from(path);
+    let (name, removed) = record_install(
+        db,
+        "Steamodded",
+        &path,
+        &[],
+        Some(tag.clone()),
+        RecordKind::Index,
+        mods_dirs,
+    )
+    .await?;
+    run.removed += removed;
+    run.installed.push(InstalledCatalogMod {
+        name,
+        path,
+        version: tag,
+        source: InstallSource::Index,
+        source_id: None,
+    });
+    Ok(())
+}
+
+fn framework_dependencies(step: &PlanStep) -> Vec<String> {
+    let mut deps = Vec::new();
+    if step.requires_steamodded {
+        deps.push("Steamodded".to_string());
+    }
+    if step.requires_talisman && step.source == InstallSource::Index {
+        deps.push("Talisman".to_string());
+    }
+    deps
+}
+
+async fn install_index_step(
+    db: &std::sync::Mutex<bmm_lib::database::Database>,
+    step: &PlanStep,
+    mods_dirs: &[PathBuf],
+    run: &mut PlanRun,
+) -> Result<(), String> {
+    let url = crate::catalog::resolve_install_url(&step.download_url).await?;
+    let folder = Some(step.folder_name.clone()).filter(|f| !f.trim().is_empty());
+    let (url_ref, folder_ref) = (&url, &folder);
+    let path = with_install_retries(|| async move {
+        bmm_lib::installer::install_mod(url_ref.clone(), folder_ref.clone())
+            .await
+            .map_err(|e| e.to_string())
+    })
+    .await?;
+    let kind = match (&step.tracked_name, &step.tracked_source) {
+        (Some(row), Some(source)) if source != SOURCE_INDEX => RecordKind::Switch {
+            name: row,
+            source: SOURCE_INDEX,
+            source_id: None,
+        },
+        _ => RecordKind::Index,
+    };
+    let version = (!step.version.is_empty()).then(|| step.version.clone());
+    let (name, removed) = record_install(
+        db,
+        &step.title,
+        &path,
+        &framework_dependencies(step),
+        version,
+        kind,
+        mods_dirs,
+    )
+    .await?;
+    run.removed += removed;
+    run.installed.push(InstalledCatalogMod {
+        name,
+        path,
+        version: step.version.clone(),
+        source: InstallSource::Index,
+        source_id: None,
+    });
+    Ok(())
+}
+
+/// Returns the package and the row name it was recorded under, None for a package
+/// without mod files
+async fn install_thunderstore_step(
+    db: &std::sync::Mutex<bmm_lib::database::Database>,
+    step: &PlanStep,
+    names_by_package: &std::collections::HashMap<String, String>,
+    mods_dirs: &[PathBuf],
+    run: &mut PlanRun,
+) -> Result<Option<(String, String)>, String> {
+    let full_name = step
+        .full_name
+        .as_deref()
+        .ok_or_else(|| format!("{} has no Thunderstore package", step.title))?;
+    let (namespace, name) = crate::thunderstore::split_full_name(full_name)
+        .ok_or_else(|| format!("invalid package name '{full_name}'"))?;
+    let url = step.download_url.as_str();
+    let install = with_install_retries(|| async move {
+        bmm_lib::installer::install_thunderstore_package(url, namespace, name)
+            .await
+            .map_err(|e| e.to_string())
+    })
+    .await?;
+    run.warnings.extend(
+        install
+            .warnings
+            .iter()
+            .map(|w| format!("{} {}: {w}", step.title, step.version)),
+    );
+    let Some(path) = install.path else {
+        run.warnings.push(format!(
+            "{} {} has no mod files, only its dependencies were installed",
+            step.title, step.version
+        ));
+        return Ok(None);
+    };
+
+    let mut dependencies: Vec<String> = Vec::new();
+    for dep in &step.requires {
+        let tracked = match names_by_package.get(&dep.to_ascii_lowercase()) {
+            Some(name) => Some(name.clone()),
+            None => {
+                let db = db.lock().unwrap_or_else(|e| e.into_inner());
+                map_error(db.get_installed_by_source_id(dep))?.map(|m| m.name)
+            }
+        };
+        if let Some(name) = tracked
+            && !dependencies.contains(&name)
+        {
+            dependencies.push(name);
+        }
+    }
+    dependencies.extend(framework_dependencies(step));
+
+    let kind = match (&step.tracked_name, &step.tracked_source) {
+        (Some(row), Some(source)) if source != SOURCE_THUNDERSTORE => RecordKind::Switch {
+            name: row,
+            source: SOURCE_THUNDERSTORE,
+            source_id: Some(full_name),
+        },
+        _ => RecordKind::Thunderstore {
+            source_id: full_name,
+        },
+    };
+    let (recorded, removed) = record_install(
+        db,
+        &step.title,
+        &path,
+        &dependencies,
+        Some(step.version.clone()),
+        kind,
+        mods_dirs,
+    )
+    .await?;
+    run.removed += removed;
+    run.installed.push(InstalledCatalogMod {
+        name: recorded.clone(),
+        path,
+        version: step.version.clone(),
+        source: InstallSource::Thunderstore,
+        source_id: Some(full_name.to_string()),
+    });
+    Ok(Some((full_name.to_string(), recorded)))
 }
 
 #[cfg(test)]
@@ -1298,6 +1772,105 @@ mod tests {
         let (envs, rest) = split_prefix_env(&parts);
         assert_eq!(envs.len(), 2);
         assert!(rest.is_empty());
+    }
+
+    fn temp_db(dir: &Path) -> std::sync::Mutex<bmm_lib::database::Database> {
+        std::sync::Mutex::new(
+            bmm_lib::database::Database::open_at(&dir.join("bmm_storage.db")).expect("db"),
+        )
+    }
+
+    fn make_mod(dir: &Path) {
+        std::fs::create_dir_all(dir).unwrap();
+        std::fs::write(dir.join("main.lua"), "-- mod").unwrap();
+    }
+
+    #[test]
+    fn source_switch_keeps_the_row_and_removes_the_old_folder() {
+        let td = tempfile::tempdir().unwrap();
+        let mods = td.path().join("Mods");
+        let old = mods.join("JokerDisplay");
+        let new = mods.join("nh6574-JokerDisplay");
+        make_mod(&old);
+        std::fs::write(old.join(".lovelyignore"), "").unwrap();
+        make_mod(&new);
+        let db = temp_db(td.path());
+        db.lock()
+            .unwrap()
+            .add_installed_mod(
+                "JokerDisplay",
+                &old.to_string_lossy(),
+                &["Steamodded".to_string()],
+                Some("d3c022d".into()),
+            )
+            .unwrap();
+
+        let (name, removed) = tauri::async_runtime::block_on(record_install(
+            &db,
+            "JokerDisplay",
+            &new,
+            &[],
+            Some("2.0.5".into()),
+            RecordKind::Switch {
+                name: "JokerDisplay",
+                source: SOURCE_THUNDERSTORE,
+                source_id: Some("nh6574-JokerDisplay"),
+            },
+            std::slice::from_ref(&mods),
+        ))
+        .expect("record");
+
+        assert_eq!(name, "JokerDisplay");
+        assert_eq!(removed, 1);
+        assert!(!old.exists());
+        assert!(new.join(".lovelyignore").exists(), "stays disabled");
+        let rows = db.lock().unwrap().get_installed_mods().unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].source, SOURCE_THUNDERSTORE);
+        assert_eq!(rows[0].source_id.as_deref(), Some("nh6574-JokerDisplay"));
+        assert_eq!(rows[0].current_version.as_deref(), Some("2.0.5"));
+        assert_eq!(rows[0].path, new.to_string_lossy());
+    }
+
+    #[test]
+    fn thunderstore_installs_get_their_own_row_next_to_an_index_mod() {
+        let td = tempfile::tempdir().unwrap();
+        let mods = td.path().join("Mods");
+        let index_dir = mods.join("Pokermon");
+        let ts_dir = mods.join("PokermonPlus-Pokermon");
+        make_mod(&index_dir);
+        make_mod(&ts_dir);
+        let db = temp_db(td.path());
+        db.lock()
+            .unwrap()
+            .add_installed_mod("Pokermon", &index_dir.to_string_lossy(), &[], None)
+            .unwrap();
+
+        let record = |version: &str| {
+            tauri::async_runtime::block_on(record_install(
+                &db,
+                "Pokermon",
+                &ts_dir,
+                &["Pokermon".to_string()],
+                Some(version.into()),
+                RecordKind::Thunderstore {
+                    source_id: "PokermonPlus-Pokermon",
+                },
+                std::slice::from_ref(&mods),
+            ))
+            .expect("record")
+        };
+        assert_eq!(record("1.1.0"), ("Pokermon (PokermonPlus)".to_string(), 0));
+        // An update finds the row by package and keeps the name
+        assert_eq!(record("1.2.0"), ("Pokermon (PokermonPlus)".to_string(), 0));
+        assert!(index_dir.exists(), "the index mod is protected");
+        let rows = db.lock().unwrap().get_installed_mods().unwrap();
+        assert_eq!(rows.len(), 2);
+        let ts = rows
+            .iter()
+            .find(|r| r.source == SOURCE_THUNDERSTORE)
+            .unwrap();
+        assert_eq!(ts.current_version.as_deref(), Some("1.2.0"));
     }
 
     #[test]

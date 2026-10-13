@@ -111,6 +111,9 @@ pub struct OrphanReconcileResult {
     pub skipped: bool,
     pub changed: Vec<String>,
     pub orphan_total: usize,
+    /// Installed Thunderstore mods whose package is deprecated, they stay installable
+    /// and are not orphans
+    pub deprecated: Vec<String>,
 }
 
 /// Reconcile the orphaned flag for installed mods against the latest remote
@@ -125,13 +128,12 @@ pub async fn reconcile_orphan_mods(
     app_handle: tauri::AppHandle,
     remote_titles: Vec<String>,
 ) -> Result<OrphanReconcileResult, String> {
+    let packages = crate::thunderstore::cached_packages_offline().await;
     let thunderstore_ids: std::collections::HashSet<String> =
-        crate::thunderstore::cached_full_names()
-            .await
-            .into_iter()
-            .collect();
+        packages.iter().map(|p| p.full_name.clone()).collect();
     let mut db = state.db.lock().unwrap_or_else(|e| e.into_inner());
     let installed = map_error(db.get_installed_mods())?;
+    let deprecated = crate::install_plan::deprecated_installed(&installed, &packages);
     let non_orphan_count = installed.iter().filter(|m| !m.orphaned).count();
 
     // Safety: skip when the remote returned nothing, or returned far fewer
@@ -148,6 +150,7 @@ pub async fn reconcile_orphan_mods(
             skipped: true,
             changed: Vec::new(),
             orphan_total: installed.iter().filter(|m| m.orphaned).count(),
+            deprecated,
         });
     }
 
@@ -183,6 +186,7 @@ pub async fn reconcile_orphan_mods(
         skipped: false,
         changed,
         orphan_total,
+        deprecated,
     })
 }
 

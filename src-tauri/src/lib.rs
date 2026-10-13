@@ -2,6 +2,7 @@ mod assets;
 mod catalog;
 pub mod commands;
 mod compat_helper;
+mod install_plan;
 mod links;
 mod mod_index;
 mod models;
@@ -445,6 +446,8 @@ pub fn run() {
             commands::system::get_app_version,
             commands::install::get_installed_mods_from_db,
             commands::install::install_mod,
+            commands::install::plan_catalog_install,
+            commands::install::install_catalog_mod,
             commands::install::add_installed_mod,
             commands::install::remove_installed_mod,
             commands::install::get_steamodded_versions,

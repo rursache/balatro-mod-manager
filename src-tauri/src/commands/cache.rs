@@ -6,6 +6,7 @@ use bmm_lib::cache::Mod;
 use serde::Serialize;
 
 use crate::assets::{ensure_assets_dirs_async, safe_slug};
+use crate::install_plan::thunderstore_update_available;
 use crate::state::AppState;
 use crate::util::map_error;
 use once_cell::sync::Lazy;
@@ -53,6 +54,11 @@ pub(crate) async fn load_mods_cache_shared() -> Result<Option<Arc<Vec<Mod>>>, St
         *guard = None;
     }
     Ok(fresh)
+}
+
+/// Latest Thunderstore versions from the cached listing, never hits the network
+async fn thunderstore_latest_versions() -> std::collections::HashMap<String, String> {
+    crate::thunderstore::latest_versions(&crate::thunderstore::cached_packages_offline().await)
 }
 
 #[tauri::command]
@@ -160,11 +166,21 @@ pub async fn mod_update_available(
     mod_name: String,
     state: tauri::State<'_, AppState>,
 ) -> Result<bool, String> {
-    let last_installed_version = {
+    let (last_installed_version, row) = {
         let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
-        db.get_last_installed_version(&mod_name)
-            .map_err(|e| e.to_string())?
+        let version = db
+            .get_last_installed_version(&mod_name)
+            .map_err(|e| e.to_string())?;
+        let row = db.get_mod_details(&mod_name).ok();
+        (version, row)
     }; // guard dropped here
+
+    if let Some(row) = &row
+        && let Some(available) =
+            thunderstore_update_available(row, &thunderstore_latest_versions().await)
+    {
+        return Ok(available);
+    }
 
     if last_installed_version.is_empty() {
         return Ok(false);
@@ -197,10 +213,9 @@ pub async fn mods_updates_map(
         db.get_installed_mods().map_err(|e| e.to_string())?
     }; // guard dropped here
 
-    let cached_mods = match load_mods_cache_shared().await? {
-        Some(mods) => mods,
-        None => return Ok(std::collections::HashMap::new()),
-    };
+    let cached_mods = load_mods_cache_shared()
+        .await?
+        .unwrap_or_else(|| Arc::new(Vec::new()));
 
     // Build lookup maps for remote versions by both title and folderName.
     let mut by_title = std::collections::HashMap::with_capacity(cached_mods.len());
@@ -214,8 +229,13 @@ pub async fn mods_updates_map(
         }
     }
 
+    let ts_latest = thunderstore_latest_versions().await;
     let mut out = std::collections::HashMap::new();
     for m in installed {
+        if let Some(available) = thunderstore_update_available(&m, &ts_latest) {
+            out.insert(m.name, available);
+            continue;
+        }
         let key = m.name.to_lowercase();
         let installed_version = m.current_version.unwrap_or_default();
         if installed_version.is_empty() {
@@ -262,6 +282,12 @@ pub async fn mods_state_summary(
         let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
         db.get_installed_mods().map_err(|e| e.to_string())?
     }; // guard dropped here
+
+    let ts_latest = thunderstore_latest_versions().await;
+    let ts_updates: HashMap<String, bool> = installed_mods
+        .iter()
+        .filter_map(|m| thunderstore_update_available(m, &ts_latest).map(|u| (m.name.clone(), u)))
+        .collect();
 
     // Installed list and enabled map (DB mods)
     let mut installed_list: Vec<InstalledSummary> = Vec::with_capacity(installed_mods.len());
@@ -310,6 +336,10 @@ pub async fn mods_state_summary(
 
     let mut updates: HashMap<String, bool> = HashMap::new();
     for m in &installed_list {
+        if let Some(available) = ts_updates.get(&m.name) {
+            updates.insert(m.name.clone(), *available);
+            continue;
+        }
         let key = m.name.to_lowercase();
         let installed_version = {
             let db = state.db.lock().unwrap_or_else(|e| e.into_inner());

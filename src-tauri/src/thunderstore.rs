@@ -210,8 +210,6 @@ pub fn compare_versions(a: &str, b: &str) -> Ordering {
     }
 }
 
-// Used by the dependency planner and the Multiplayer section
-#[allow(dead_code)]
 pub fn version_at_least(version: &str, minimum: &str) -> bool {
     compare_versions(version, minimum) != Ordering::Less
 }
@@ -232,7 +230,6 @@ pub fn find_version<'a>(pkg: &'a TsPackage, version: &str) -> Option<&'a TsVersi
 
 /// Thunderstore Steamodded version to the matching smods GitHub tag,
 /// `1.1814.0` is `1.0.0-beta-1814a`, from 26.x on both use the same string
-#[allow(dead_code)]
 pub fn steamodded_version_to_tag(version: &str) -> Option<String> {
     bmm_lib::smods_installer::ts_version_to_tag(version)
 }
@@ -711,13 +708,20 @@ pub async fn cached_packages() -> Result<Vec<TsPackage>, String> {
     sync(false).await
 }
 
-/// Full names of every cached package, empty when nothing is cached. Never hits the network
-pub async fn cached_full_names() -> Vec<String> {
+/// Packages from memory or the on-disk cache, empty when nothing is cached. Never hits the network
+pub async fn cached_packages_offline() -> Vec<TsPackage> {
     let mut guard = CACHE.lock().await;
-    load_or_empty(&mut guard)
-        .packages
+    load_or_empty(&mut guard).packages.clone()
+}
+
+/// Latest active version per package keyed by lowercase `Namespace-Name`
+pub fn latest_versions(packages: &[TsPackage]) -> std::collections::HashMap<String, String> {
+    packages
         .iter()
-        .map(|p| p.full_name.clone())
+        .filter_map(|p| {
+            latest_active_version(p)
+                .map(|v| (p.full_name.to_ascii_lowercase(), v.version_number.clone()))
+        })
         .collect()
 }
 
