@@ -1476,15 +1476,36 @@ pub fn copy_dlls_to_save_dir(
     Ok(owned)
 }
 
+fn is_openssl_dll(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|n| WINDOWS_LIBS.iter().any(|l| l.eq_ignore_ascii_case(n)))
+}
+
+/// Tracked DLLs still on disk, they stay tracked so a later cleanup retries them
+pub fn copied_dlls_left(tracked: &[PathBuf]) -> Vec<PathBuf> {
+    tracked
+        .iter()
+        .filter(|p| is_openssl_dll(p) && p.exists())
+        .cloned()
+        .collect()
+}
+
+/// Any MultiplayerAPI copy, enabled or not, still uses the copied DLLs
+pub fn has_api_copy(found: &[FoundMod]) -> bool {
+    found.iter().any(|m| {
+        m.id.eq_ignore_ascii_case(API_MOD_ID)
+            || m.package
+                .as_deref()
+                .is_some_and(|p| p.eq_ignore_ascii_case(API_PACKAGE))
+    })
+}
+
 /// Removes DLLs BMM copied, only the two OpenSSL names are ever touched
 pub fn remove_copied_dlls(tracked: &[PathBuf]) -> Vec<PathBuf> {
     tracked
         .iter()
-        .filter(|p| {
-            p.file_name()
-                .and_then(|n| n.to_str())
-                .is_some_and(|n| WINDOWS_LIBS.iter().any(|l| l.eq_ignore_ascii_case(n)))
-        })
+        .filter(|p| is_openssl_dll(p))
         .filter(|p| match std::fs::remove_file(p) {
             Ok(()) => true,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
@@ -2128,6 +2149,22 @@ mod tests {
         assert!(save.join("libssl-3-x64.dll").exists());
 
         assert!(copy_dlls_to_save_dir(&td.path().join("missing"), &save, &[]).is_err());
+
+        // Removed or foreign entries are dropped, a DLL that could not be deleted stays tracked
+        let stuck = save.join("libssl-3-x64.dll");
+        let tracked = [owned[0].clone(), stuck.clone(), save.join("other.dll")];
+        assert_eq!(copied_dlls_left(&tracked), [stuck]);
+    }
+
+    #[test]
+    fn api_copies_are_found_enabled_or_not() {
+        let td = tempfile::tempdir().unwrap();
+        let mods = td.path().join("Mods");
+        legacy_github(&mods);
+        assert!(!has_api_copy(&scan_mods_dir(&mods)));
+        let dir = api_package(&mods, &[]);
+        write(&dir.join(".lovelyignore"), "");
+        assert!(has_api_copy(&scan_mods_dir(&mods)));
     }
 
     #[test]

@@ -137,11 +137,28 @@ fn remove_tracked_dlls(db: &Mutex<Database>) -> Vec<String> {
         return Vec::new();
     }
     let removed = multiplayer::remove_copied_dlls(&tracked);
-    set_copied_dlls(&db, &[]);
+    set_copied_dlls(&db, &multiplayer::copied_dlls_left(&tracked));
     removed
         .iter()
         .map(|p| p.to_string_lossy().to_string())
         .collect()
+}
+
+/// Removes the DLLs BMM copied into the Proton save folder once no MultiplayerAPI is
+/// left, whichever view uninstalled it
+pub(crate) fn remove_dlls_without_api(db: &Mutex<Database>) {
+    let tracked = {
+        let db = db.lock().unwrap_or_else(|e| e.into_inner());
+        copied_dlls(&db)
+    };
+    if tracked.is_empty()
+        || multiplayer::has_api_copy(&multiplayer::scan_mods_dirs(&existing_mods_dirs()))
+    {
+        return;
+    }
+    for path in remove_tracked_dlls(db) {
+        log::info!("Removed {path}, MultiplayerAPI is no longer installed");
+    }
 }
 
 #[tauri::command]
@@ -639,6 +656,7 @@ pub(crate) fn apply_wine_launch(
     envs: &mut Vec<(String, String)>,
 ) {
     let Some(api) = launch_api() else {
+        remove_dlls_without_api(db);
         return;
     };
     let existing = envs

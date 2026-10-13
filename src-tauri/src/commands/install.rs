@@ -1000,6 +1000,7 @@ pub async fn cascade_uninstall(
         let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
         map_error(db.remove_installed_mod_by_name_or_path(mod_name, &mod_path.to_string_lossy()))?;
     }
+    crate::commands::multiplayer::remove_dlls_without_api(&state.db);
 
     sync_compat_helper_after_mod_change(&state).await;
     refresh_mod_detection_cache();
@@ -1025,6 +1026,7 @@ pub async fn force_remove_mod(
         let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
         map_error(db.remove_installed_mod_by_name_or_path(&name, &path))?;
     }
+    crate::commands::multiplayer::remove_dlls_without_api(&state.db);
     sync_compat_helper_after_mod_change(&state).await;
     refresh_mod_detection_cache();
     emit_installed_mods_changed(&app_handle, Vec::new(), vec![name]);
@@ -1070,6 +1072,7 @@ pub async fn remove_installed_mod(
         let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
         map_error(db.remove_installed_mod_by_name_or_path(&name, &path))?;
     }
+    crate::commands::multiplayer::remove_dlls_without_api(&state.db);
 
     sync_compat_helper_after_mod_change(&state).await;
     refresh_mod_detection_cache();
