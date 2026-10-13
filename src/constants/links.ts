@@ -13,3 +13,4 @@ export const INDEX_BRANCH = "main";
 export const INDEX_REPO_URL = `https://github.com/${INDEX_REPO}`;
 
 export const THUNDERSTORE_COMMUNITY_URL = "https://thunderstore.io/c/balatro/";
+export const BET_DOWNLOAD_URL = "https://new.balatromp.com/download";
