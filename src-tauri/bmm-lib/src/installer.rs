@@ -1030,12 +1030,15 @@ fn remove_dir_with_retry(path: &PathBuf, max_retries: u32) -> Result<(), AppErro
 }
 
 pub async fn uninstall_mod(path: PathBuf) -> Result<(), AppError> {
-    log::info!("Uninstalling mod: {path:?}");
-
     let mods_dir = resolve_mods_dir()?;
     let candidates = mod_dir_candidates().unwrap_or_else(|_| vec![mods_dir.clone()]);
+    uninstall_mod_from(path, &candidates).await
+}
 
-    validate_uninstall_path(&path, &candidates)?;
+/// [`uninstall_mod`] for a folder that must sit inside one of `mods_dirs`
+pub async fn uninstall_mod_from(path: PathBuf, mods_dirs: &[PathBuf]) -> Result<(), AppError> {
+    log::info!("Uninstalling mod: {path:?}");
+    validate_uninstall_path(&path, mods_dirs)?;
     log::debug!("Uninstall path validation passed for: {:?}", path);
 
     if let Some(dir_name) = path.file_name().and_then(|n| n.to_str())
@@ -1318,6 +1321,16 @@ pub async fn install_thunderstore_package(
     namespace: &str,
     name: &str,
 ) -> Result<ThunderstoreInstall, AppError> {
+    install_thunderstore_package_into(download_url, namespace, name, None).await
+}
+
+/// [`install_thunderstore_package`] into `mods_dir`, the game's Mods folder when None
+pub async fn install_thunderstore_package_into(
+    download_url: &str,
+    namespace: &str,
+    name: &str,
+    mods_dir: Option<&Path>,
+) -> Result<ThunderstoreInstall, AppError> {
     validate_thunderstore_download_url(download_url, namespace, name)?;
     thunderstore_folder_name(namespace, name)?;
 
@@ -1329,9 +1342,12 @@ pub async fn install_thunderstore_package(
             "Thunderstore package {namespace}-{name} is not a zip archive"
         )));
     }
-    let mods_dir = resolve_mods_dir().inspect_err(|_| {
-        let _ = fs::remove_file(&temp_path);
-    })?;
+    let mods_dir = match mods_dir {
+        Some(dir) => dir.to_path_buf(),
+        None => resolve_mods_dir().inspect_err(|_| {
+            let _ = fs::remove_file(&temp_path);
+        })?,
+    };
 
     let namespace = namespace.to_string();
     let name = name.to_string();

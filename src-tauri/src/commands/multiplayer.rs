@@ -415,6 +415,7 @@ async fn execute(
         installed: Vec::new(),
         warnings: plan.warnings.clone(),
         removed: 0,
+        mods_dir: None,
     };
     let mut plans = Vec::new();
     let mut removed = Vec::new();

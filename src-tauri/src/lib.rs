@@ -4,6 +4,8 @@ pub mod commands;
 mod compat_helper;
 mod install_plan;
 mod links;
+#[cfg(test)]
+mod live_install_tests;
 mod mod_index;
 mod models;
 mod multiplayer;

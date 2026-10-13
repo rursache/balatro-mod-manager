@@ -1489,6 +1489,7 @@ pub async fn install_catalog_mod(
         installed: Vec::new(),
         warnings: plan.warnings.clone(),
         removed: 0,
+        mods_dir: None,
     };
     let result = run_plan(
         &state.db,
@@ -1523,6 +1524,8 @@ pub(crate) struct PlanRun {
     pub(crate) installed: Vec<InstalledCatalogMod>,
     pub(crate) warnings: Vec<String>,
     pub(crate) removed: usize,
+    /// Where Thunderstore packages go, the game's Mods folder when None
+    pub(crate) mods_dir: Option<PathBuf>,
 }
 
 pub(crate) async fn run_plan(
@@ -1733,8 +1736,9 @@ async fn install_thunderstore_step(
         return Ok(Some((full_name.to_string(), row)));
     }
     let url = step.download_url.as_str();
+    let mods_dir = run.mods_dir.as_deref();
     let install = with_install_retries(|| async move {
-        bmm_lib::installer::install_thunderstore_package(url, namespace, name)
+        bmm_lib::installer::install_thunderstore_package_into(url, namespace, name, mods_dir)
             .await
             .map_err(|e| e.to_string())
     })
