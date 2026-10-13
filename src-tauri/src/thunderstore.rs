@@ -711,6 +711,16 @@ pub async fn sync(force: bool) -> Result<Vec<TsPackage>, String> {
             LAST_FAILED_SYNC.store(now, AtomicOrdering::Relaxed);
             log::warn!("Thunderstore: sync failed, serving cached packages: {e}");
             set_last_error(Some(e));
+/// Full names of every cached package, empty when nothing is cached. Never hits the network
+pub async fn cached_full_names() -> Vec<String> {
+    let mut guard = CACHE.lock().await;
+    load_or_empty(&mut guard)
+        .packages
+        .iter()
+        .map(|p| p.full_name.clone())
+        .collect()
+}
+
             Ok(working.packages)
         }
         Err(e) => {

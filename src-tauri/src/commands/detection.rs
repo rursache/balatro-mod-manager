@@ -125,6 +125,11 @@ pub async fn reconcile_orphan_mods(
     app_handle: tauri::AppHandle,
     remote_titles: Vec<String>,
 ) -> Result<OrphanReconcileResult, String> {
+    let thunderstore_ids: std::collections::HashSet<String> =
+        crate::thunderstore::cached_full_names()
+            .await
+            .into_iter()
+            .collect();
     let mut db = state.db.lock().unwrap_or_else(|e| e.into_inner());
     let installed = map_error(db.get_installed_mods())?;
     let non_orphan_count = installed.iter().filter(|m| !m.orphaned).count();
@@ -147,7 +152,12 @@ pub async fn reconcile_orphan_mods(
     }
 
     let present: std::collections::HashSet<String> = remote_titles.into_iter().collect();
-    let changed = map_error(db.reconcile_orphaned_mods(&present))?;
+    // Without a cached listing Thunderstore rows keep their current flag
+    let changed = if thunderstore_ids.is_empty() {
+        map_error(db.reconcile_orphaned_mods(&present))?
+    } else {
+        map_error(db.reconcile_orphaned_mods_by_source(&present, &thunderstore_ids))?
+    };
     let orphan_total = map_error(db.get_installed_mods())?
         .iter()
         .filter(|m| m.orphaned)
