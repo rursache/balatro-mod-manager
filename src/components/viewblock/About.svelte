@@ -1,21 +1,19 @@
 <script lang="ts">
-  import { BookOpen, Coffee } from "lucide-svelte";
-  import { Confetti } from "svelte-confetti";
+  import { BookOpen } from "lucide-svelte";
+  import Github from "../GithubIcon.svelte";
   import { openExternal } from "$lib/opener";
+  import {
+    APP_REPO_URL,
+    MAINTAINER_URL,
+    ORIGINAL_AUTHOR_URL,
+    WIKI_URL,
+  } from "../../constants/links";
 
   export let version = "";
 
-  let showConfetti = false;
-
-  let buttonRect: DOMRect;
-
-  const handleKofiClick = async (event: MouseEvent) => {
-    const button = event.currentTarget as HTMLButtonElement;
-    buttonRect = button.getBoundingClientRect();
-    showConfetti = true;
-    setTimeout(() => (showConfetti = false), 2000);
+  const open = async (url: string) => {
     try {
-      await openExternal("https://ko-fi.com/skyline69/goal?g=0");
+      await openExternal(url);
     } catch (error) {
       console.error("Failed to open URL:", error);
     }
@@ -48,22 +46,13 @@
       </div>
 
       <div class="button-container">
-        <button
-          class="wiki-button"
-          on:click={() =>
-            openExternal("https://balatromods.miraheze.org/wiki/Main_Page")}
-        >
+        <button class="wiki-button" on:click={() => open(WIKI_URL)}>
           <BookOpen size={20} />
           <span>Visit Wiki</span>
         </button>
-        <button class="kofi-button" on:click={handleKofiClick}>
-          <div class="confetti-container">
-            {#if showConfetti}
-              <Confetti x={[0, 1]} y={[0, 1]} duration={4000} amount={50} />
-            {/if}
-          </div>
-          <Coffee size={20} />
-          <span>Support on Ko-fi</span>
+        <button class="github-button" on:click={() => open(APP_REPO_URL)}>
+          <Github size={20} />
+          <span>GitHub</span>
         </button>
       </div>
 
@@ -73,10 +62,21 @@
     </div>
 
     <div class="profile-section">
-      <div class="profile">
-        <img src="/images/pb.jpg" alt="" />
+      <div class="app-icon">
+        <img src="/images/app-icon.png" alt="" />
       </div>
-      <span class="profile-title">Efe/Skyline - The Creator of BMM</span>
+      <span class="profile-title">
+        Maintained by
+        <button class="credit-link" on:click={() => open(MAINTAINER_URL)}
+          >Radu Ursache</button
+        >
+      </span>
+      <span class="profile-subtitle">
+        Originally created by
+        <button class="credit-link" on:click={() => open(ORIGINAL_AUTHOR_URL)}
+          >Efe (Skyline)</button
+        >
+      </span>
     </div>
   </div>
 </div>
@@ -121,20 +121,17 @@
     gap: 1rem;
   }
 
-  .profile {
+  .app-icon {
     flex-shrink: 0;
-    width: 200px;
-    height: 200px;
-    border-radius: 50%;
-    overflow: hidden;
-    border: 4px solid #f7f1e4;
-    box-shadow: 0 0 10px rgba(0, 0, 0, 0.3);
+    width: 160px;
+    height: 160px;
   }
 
-  .profile img {
+  .app-icon img {
     width: 100%;
     height: 100%;
-    object-fit: cover;
+    image-rendering: pixelated;
+    filter: drop-shadow(0 0 10px rgba(0, 0, 0, 0.3));
     -webkit-user-drag: none;
     user-select: none;
     -webkit-user-select: none;
@@ -145,15 +142,38 @@
     flex: 1;
   }
 
-  .profile-title {
+  .profile-title,
+  .profile-subtitle {
     color: #f7f1e4;
-    font-size: 1rem;
+    font-size: 1.1rem;
+    text-align: center;
     font-family: "M6X11", sans-serif;
     text-shadow:
       -1px -1px 0 #000,
       1px -1px 0 #000,
       -1px 1px 0 #000,
       1px 1px 0 #000;
+  }
+
+  .profile-subtitle {
+    font-size: 0.9rem;
+    margin-top: -0.5rem;
+  }
+
+  .credit-link {
+    background: none;
+    border: none;
+    padding: 0;
+    margin: 0;
+    font: inherit;
+    color: #fdcf51;
+    text-shadow: inherit;
+    cursor: pointer;
+  }
+
+  .credit-link:hover {
+    color: #fde700;
+    text-decoration: underline;
   }
 
   .wiki-button {
@@ -183,8 +203,8 @@
     transform: scale(0.95);
   }
 
-  .kofi-button {
-    background-color: #29abe0;
+  .github-button {
+    background-color: #24292f;
     border: 4px solid #f4eee0;
     border-radius: 8px;
     color: #fff;
@@ -198,15 +218,14 @@
     display: flex;
     align-items: center;
     gap: 0.5rem;
-    position: relative;
   }
 
-  .kofi-button:hover {
-    background-color: #13a3e1;
+  .github-button:hover {
+    background-color: #32383f;
     transform: scale(1.05);
   }
 
-  .kofi-button:active {
+  .github-button:active {
     transform: scale(0.95);
   }
 
@@ -249,15 +268,6 @@
     margin: 1rem 0;
   }
 
-  .confetti-container {
-    position: absolute;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 100%;
-    pointer-events: none;
-  }
-
   @media (max-width: 1160px) {
     p {
       font-size: 1rem;
@@ -266,12 +276,15 @@
       font-size: 1rem;
     }
 
-    .profile {
-      width: 170px;
-      height: 170px;
+    .app-icon {
+      width: 136px;
+      height: 136px;
     }
     .profile-title {
-      font-size: 0.8rem;
+      font-size: 0.9rem;
+    }
+    .profile-subtitle {
+      font-size: 0.75rem;
     }
 
     h2 {
@@ -284,7 +297,7 @@
       font-size: 1rem;
       padding: 0.4rem 0.8rem;
     }
-    .kofi-button {
+    .github-button {
       font-size: 1rem;
       padding: 0.4rem 0.8rem;
     }

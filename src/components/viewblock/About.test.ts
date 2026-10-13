@@ -23,22 +23,46 @@ describe("About view", () => {
     );
   });
 
-  it("has no link to the retired status page", () => {
+  it("opens the fork repository when the GitHub button is clicked", async () => {
     render(About);
 
-    expect(screen.queryByRole("button", { name: /status page/i })).toBeNull();
-  });
-
-  it("opens the Ko-fi page when support button is clicked", async () => {
-    render(About);
-
-    const kofiButton = screen.getByRole("button", {
-      name: /support on ko-fi/i,
-    });
-    await fireEvent.click(kofiButton);
+    await fireEvent.click(screen.getByRole("button", { name: /^github$/i }));
 
     expect(openExternal).toHaveBeenCalledWith(
-      "https://ko-fi.com/skyline69/goal?g=0",
+      "https://github.com/rursache/balatro-mod-manager",
     );
+  });
+
+  it("credits the maintainer and the original creator", async () => {
+    render(About);
+
+    expect(screen.getByText(/maintained by/i)).toBeTruthy();
+    await fireEvent.click(screen.getByRole("button", { name: "Radu Ursache" }));
+    expect(openExternal).toHaveBeenCalledWith("https://radu.ursache.ro");
+
+    expect(screen.getByText(/originally created by/i)).toBeTruthy();
+    await fireEvent.click(
+      screen.getByRole("button", { name: "Efe (Skyline)" }),
+    );
+    expect(openExternal).toHaveBeenCalledWith("https://github.com/skyline69");
+  });
+
+  it("shows the version it is given", () => {
+    render(About, { props: { version: "1.2.3" } });
+
+    expect(screen.getByText("Current version: v1.2.3")).toBeTruthy();
+  });
+
+  it("hides the version line until the version is known", () => {
+    render(About);
+
+    expect(screen.queryByText(/current version/i)).toBeNull();
+  });
+
+  it("has no Ko-fi or status page links", () => {
+    render(About);
+
+    expect(screen.queryByRole("button", { name: /ko-fi/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /status page/i })).toBeNull();
   });
 });
