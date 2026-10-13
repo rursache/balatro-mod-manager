@@ -5,8 +5,6 @@ use std::env;
 #[cfg(target_os = "linux")]
 use std::fs;
 #[cfg(target_os = "linux")]
-use std::fs::remove_file;
-#[cfg(target_os = "linux")]
 use std::os::unix::fs::PermissionsExt;
 #[cfg(target_os = "linux")]
 use std::os::unix::fs::symlink;
@@ -30,7 +28,7 @@ use bmm_lib::lovely;
 #[cfg(target_os = "linux")]
 use bmm_lib::lovely::{
     ensure_love_binary, ensure_lovely_so_exists, get_latest_lovely_version,
-    merge_wine_dll_overrides,
+    merge_wine_dll_overrides, remove_installed_lovely,
 };
 #[cfg(any(target_os = "windows", target_os = "linux"))]
 use bmm_lib::lovely::{ensure_win_injector, supports_vanilla_flag};
@@ -712,10 +710,11 @@ pub async fn launch_balatro(state: tauri::State<'_, AppState>) -> Result<(), Str
                 && current.as_deref() != Some(latest.as_str())
             {
                 let _ = db.set_lovely_version(&latest);
-                if let Some(config_dir) = dirs::config_dir() {
-                    let _ = remove_file(config_dir.join("Balatro/bins/liblovely.so"));
+                // Drop the cached proxy DLLs too, the DB now claims the latest Lovely so
+                // the update prompt that would replace a legacy version.dll never fires
+                if let Err(e) = remove_installed_lovely(Some(path.as_path())) {
+                    warn!("Failed to remove outdated Lovely files: {e}");
                 }
-                let _ = remove_file(path.join("liblovely.so"));
             }
         }
 
