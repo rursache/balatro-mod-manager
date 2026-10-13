@@ -34,6 +34,8 @@
   let isDarkMode = $state(false);
   let isFullscreen = $state(false);
   let isFullscreenChanging = $state(false);
+  let unlistenResize: (() => void) | null = null;
+  let destroyed = false;
   let lastReindexStats = $state({
     removedFiles: 0,
     cleanedEntries: 0,
@@ -193,6 +195,14 @@
     darkMode.set(newValue);
   }
 
+  async function refreshFullscreen() {
+    try {
+      isFullscreen = await Window.getCurrent().isFullscreen();
+    } catch (error) {
+      console.warn("Failed to read fullscreen state:", error);
+    }
+  }
+
   async function handleFullscreenChange() {
     const newValue = !isFullscreen;
     isFullscreen = newValue;
@@ -289,10 +299,17 @@
         }
       }
 
+      await refreshFullscreen();
       try {
-        isFullscreen = await Window.getCurrent().isFullscreen();
+        // Leaving fullscreen through the macOS traffic light or Ctrl+Cmd+F
+        // bypasses the toggle, so resync on every resize
+        const unlisten = await Window.getCurrent().onResized(() => {
+          if (!isFullscreenChanging) void refreshFullscreen();
+        });
+        if (destroyed) unlisten();
+        else unlistenResize = unlisten;
       } catch (error) {
-        console.warn("Failed to read fullscreen state:", error);
+        console.warn("Failed to watch fullscreen state:", error);
       }
 
       // Fetch all settings in a single batched IPC call
@@ -322,6 +339,8 @@
     })();
 
     return () => {
+      destroyed = true;
+      unlistenResize?.();
       unsubscribeDarkMode();
     };
   });
@@ -567,7 +586,7 @@
         Use a darker palette across the UI for low-light environments.
       </p>
       <div class="console-settings">
-        <span class="label-text">Launch Fullscreen</span>
+        <span class="label-text">Fullscreen</span>
         <div class="switch-container">
           <label class="switch">
             <input
@@ -581,7 +600,8 @@
         </div>
       </div>
       <p class="description-small">
-        Start and stay in fullscreen unless you turn it off here.
+        Run the manager in fullscreen, your choice is remembered between
+        launches
       </p>
       {#if !isLinux}
         <div class="console-settings">

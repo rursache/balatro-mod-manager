@@ -16,6 +16,7 @@ const invokeMock = vi.hoisted(() => vi.fn());
 const addMessageMock = vi.hoisted(() => vi.fn());
 const isFullscreenMock = vi.hoisted(() => vi.fn());
 const setFullscreenMock = vi.hoisted(() => vi.fn());
+const onResizedMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: (...args: unknown[]) => invokeMock(...args),
@@ -34,6 +35,7 @@ vi.mock("@tauri-apps/api/window", () => ({
     getCurrent: () => ({
       isFullscreen: (...args: unknown[]) => isFullscreenMock(...args),
       setFullscreen: (...args: unknown[]) => setFullscreenMock(...args),
+      onResized: (...args: unknown[]) => onResizedMock(...args),
     }),
   },
 }));
@@ -62,6 +64,7 @@ describe("Settings view", () => {
     vi.clearAllMocks();
     isFullscreenMock.mockResolvedValue(true);
     setFullscreenMock.mockResolvedValue(undefined);
+    onResizedMock.mockResolvedValue(() => {});
     mockStorage = {};
     vi.stubGlobal("localStorage", {
       getItem: (key: string) => mockStorage[key] ?? null,
@@ -191,5 +194,25 @@ describe("Settings view", () => {
       expect(setFullscreenMock).toHaveBeenCalledWith(false);
     });
     expect((toggle as HTMLInputElement).checked).toBe(false);
+  });
+
+  it("resyncs fullscreen state when the window is resized", async () => {
+    render(Settings);
+
+    const toggle = await screen.findByRole("checkbox", {
+      name: /fullscreen/i,
+    });
+    await waitFor(() => {
+      expect((toggle as HTMLInputElement).checked).toBe(true);
+      expect(onResizedMock).toHaveBeenCalled();
+    });
+
+    isFullscreenMock.mockResolvedValue(false);
+    const onResized = onResizedMock.mock.calls[0][0] as () => void;
+    onResized();
+
+    await waitFor(() => {
+      expect((toggle as HTMLInputElement).checked).toBe(false);
+    });
   });
 });
