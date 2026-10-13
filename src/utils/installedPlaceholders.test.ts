@@ -1,7 +1,10 @@
 import { describe, it, expect } from "vitest";
 import {
+  MULTIPLAYER_DESCRIPTION,
   ORPHAN_DESCRIPTION,
   computeInstallationStatus,
+  mayBeMultiplayerRow,
+  multiplayerCardFor,
   findInstalledRow,
   indexInstalledRows,
   hasActionableUpdate,
@@ -10,6 +13,11 @@ import {
   reconcileInstalledPlaceholders,
 } from "./installedPlaceholders";
 import type { InstalledMod, Mod } from "../stores/modStore";
+import {
+  modeFixture,
+  statusFixture,
+  trackFixture,
+} from "../test/multiplayerFixtures";
 
 const catalogMod = (title: string, extra: Partial<Mod> = {}): Mod => ({
   title,
@@ -268,5 +276,164 @@ describe("hasActionableUpdate", () => {
       hasActionableUpdate(mods, { Multiplayer: true, Steamodded: true }),
     ).toBe(true);
     expect(hasActionableUpdate(mods, {})).toBe(false);
+  });
+});
+
+const mpRow = (
+  name: string,
+  pkg: string,
+  current_version = "0.5.7",
+): InstalledMod => ({
+  name,
+  path: `/Mods/BalatroMultiplayer-${pkg}`,
+  orphaned: false,
+  current_version,
+  dependencies: ["Steamodded"],
+  source: "thunderstore",
+  source_id: `BalatroMultiplayer-${pkg}`,
+});
+
+const mpStatus = (update = false) =>
+  statusFixture({
+    tracks: [
+      trackFixture({
+        track: "legacy",
+        description: "Legacy standalone Balatro Multiplayer mod",
+        icon_url: "https://cdn.example/Multiplayer-0.5.7.png",
+        installed: true,
+        installed_version: "0.5.7",
+        latest_version: update ? "0.5.8" : "0.5.7",
+        tracked_name: "Multiplayer",
+        official: true,
+        update_available: update,
+      }),
+      trackFixture({ track: "api" }),
+    ],
+    gamemodes: [
+      modeFixture({
+        icon_url: "https://cdn.example/Speedrun.png",
+        installed: true,
+        installed_version: "0.1.1",
+        tracked_name: "MultiplayerSpeedrun",
+      }),
+    ],
+  });
+
+describe("Multiplayer placeholders", () => {
+  const catalog = [catalogMod("Steamodded")];
+  const installed = [
+    row("Steamodded"),
+    mpRow("Multiplayer", "Multiplayer"),
+    mpRow("MultiplayerAPI", "MultiplayerAPI", "0.1.2"),
+    mpRow("MultiplayerSpeedrun", "MultiplayerSpeedrun", "0.1.1"),
+  ];
+
+  it("recognizes the namespace without a status and picks the role", () => {
+    expect(multiplayerCardFor(installed[1])?.role).toBe("legacy");
+    expect(multiplayerCardFor(installed[2])?.role).toBe("api");
+    expect(multiplayerCardFor(installed[3])?.role).toBe("gamemode");
+    expect(multiplayerCardFor(row("Saturn"))).toBeNull();
+    expect(
+      multiplayerCardFor({
+        ...row("JokerDisplay"),
+        source: "thunderstore",
+        source_id: "nh6574-JokerDisplay",
+      }),
+    ).toBeNull();
+  });
+
+  it("asks for the status for a manual legacy copy tracked by name", () => {
+    expect(mayBeMultiplayerRow(row("Multiplayer"))).toBe(true);
+    expect(mayBeMultiplayerRow(row("Saturn"))).toBe(false);
+    const status = statusFixture({
+      tracks: [
+        trackFixture({ installed: true, tracked_name: "Multiplayer" }),
+        trackFixture({ track: "api" }),
+      ],
+    });
+    expect(multiplayerCardFor(row("Multiplayer"), status)?.role).toBe("legacy");
+  });
+
+  it("builds a full card with owner, version and a short description", () => {
+    const out = reconcileInstalledPlaceholders(catalog, installed);
+    const card = out.find((m) => m.title === "Multiplayer")!;
+    expect(card.multiplayer?.role).toBe("legacy");
+    expect(card.publisher).toBe("BalatroMultiplayer");
+    expect(card.installedVersion).toBe("0.5.7");
+    expect(card.description).toBe(MULTIPLAYER_DESCRIPTION);
+    expect(card.orphaned).toBe(false);
+    expect(isBrowsableMod(card)).toBe(false);
+  });
+
+  it("never marks a Multiplayer package orphaned", () => {
+    const out = reconcileInstalledPlaceholders(catalog, [
+      { ...mpRow("Multiplayer", "Multiplayer"), orphaned: true },
+    ]);
+    const card = out.find((m) => m.title === "Multiplayer")!;
+    expect(card.orphaned).toBe(false);
+    expect(card.description).not.toBe(ORPHAN_DESCRIPTION);
+  });
+
+  it("takes icon, description and updates from the Multiplayer status", () => {
+    const before = reconcileInstalledPlaceholders(catalog, installed);
+    const after = reconcileInstalledPlaceholders(
+      before,
+      installed,
+      mpStatus(true),
+    );
+    const legacy = after.find((m) => m.title === "Multiplayer")!;
+    expect(legacy.thumbnailUrl).toBe(
+      "https://cdn.example/Multiplayer-0.5.7.png",
+    );
+    expect(legacy._hasThumbnail).toBe(true);
+    expect(legacy.description).toBe(
+      "Legacy standalone Balatro Multiplayer mod",
+    );
+    expect(legacy.multiplayer).toEqual({
+      role: "legacy",
+      fullName: "BalatroMultiplayer-Multiplayer",
+      latestVersion: "0.5.8",
+      updateAvailable: true,
+    });
+    const mode = after.find((m) => m.title === "MultiplayerSpeedrun")!;
+    expect(mode.multiplayer?.role).toBe("gamemode");
+    expect(mode.description).toBe("Race your friends");
+    // The same status again changes nothing
+    expect(
+      reconcileInstalledPlaceholders(after, installed, mpStatus(true)),
+    ).toBe(after);
+  });
+
+  it("repairs placeholders restored from the slim localStorage cache", () => {
+    const full = reconcileInstalledPlaceholders(catalog, installed);
+    // The persisted cache drops description and image
+    const slim = full.map((m) =>
+      m.multiplayer || m.title === "Steamodded"
+        ? ({ ...m, description: undefined, image: undefined } as unknown as Mod)
+        : m,
+    );
+    const out = reconcileInstalledPlaceholders(slim, installed);
+    const card = out.find((m) => m.title === "Multiplayer")!;
+    expect(card.description).toBe(MULTIPLAYER_DESCRIPTION);
+    expect(card.image).toBe("/images/cover.jpg");
+  });
+
+  it("leaves Multiplayer cards out of Update All", () => {
+    const out = reconcileInstalledPlaceholders(catalog, installed);
+    expect(hasActionableUpdate(out, { Multiplayer: true })).toBe(false);
+    expect(hasActionableUpdate(out, { Steamodded: true })).toBe(true);
+  });
+
+  it("uses the Thunderstore owner for other package placeholders", () => {
+    const out = reconcileInstalledPlaceholders(catalog, [
+      {
+        ...row("JokerDisplay"),
+        source: "thunderstore",
+        source_id: "nh6574-JokerDisplay",
+      },
+    ]);
+    const card = out.find((m) => m.title === "JokerDisplay")!;
+    expect(card.publisher).toBe("nh6574");
+    expect(card.multiplayer).toBeUndefined();
   });
 });

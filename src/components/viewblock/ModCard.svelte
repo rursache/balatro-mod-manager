@@ -32,6 +32,7 @@
   import { onMount, onDestroy } from "svelte";
   import { isLinuxPlatform } from "$lib/platform";
   import { formatDownloads } from "../../utils/catalogFilters";
+  import { isInstalledPlaceholder } from "../../utils/installedPlaceholders";
 
   interface Props {
     mod: Mod;
@@ -71,6 +72,14 @@
   let titleScale = $state(1);
   let unobserveTitle: (() => void) | null = null;
   let downloadsLabel = $derived(formatDownloads(mod.downloads));
+  // Nothing fills the description of a card built from a DB row later on
+  let placeholder = $derived(isInstalledPlaceholder(mod));
+  // Multiplayer packages report updates the way the Multiplayer tab does
+  let updateAvailable = $derived(
+    mod.multiplayer
+      ? mod.multiplayer.updateAvailable
+      : Boolean($updateAvailableStore[mod.title]),
+  );
   let sourceBadges = $derived(
     mod.source === "merged"
       ? ["index", "thunderstore"]
@@ -202,6 +211,11 @@
     e.stopPropagation();
     // Guard: don't allow re-entrancy while loading
     if ($loadingStates[mod.title]) {
+      return;
+    }
+    // Multiplayer tracks update together with their game modes in the Multiplayer tab
+    if (mod.multiplayer) {
+      openModView();
       return;
     }
     // Reuse the install logic but for updating
@@ -398,8 +412,16 @@
       on:error={handleThumbDone}
     />
 
-    {#if sourceBadges.length > 0 || mod.deprecated || mod.aiGenerated || mod.nsfw}
+    {#if sourceBadges.length > 0 || mod.multiplayer || mod.deprecated || mod.aiGenerated || mod.nsfw}
       <div class="badges" data-testid="mod-badges">
+        {#if mod.multiplayer}
+          <span
+            class="badge multiplayer"
+            title="Official Multiplayer package, managed from the Multiplayer tab"
+          >
+            Multiplayer
+          </span>
+        {/if}
         {#each sourceBadges as source (source)}
           <span
             class="badge source {source}"
@@ -461,7 +483,7 @@
             Removed from index
           </span>
         {/if}
-        {#if mod.orphaned && mod.installedVersion}
+        {#if mod.installedVersion && (mod.orphaned || mod.multiplayer)}
           <span class="tag version" title="Installed version">
             {mod.installedVersion}
           </span>
@@ -483,6 +505,8 @@
       <p class="fade-in">
         {truncateDynamic(stripMarkdown(descriptionText), $cardScale)}
       </p>
+    {:else if !hideDescription && placeholder}
+      <p class="desc-fallback">No description available</p>
     {:else if !hideDescription}
       <div class="desc-skeleton" aria-hidden="true">
         <div class="line" style="width: 92%"></div>
@@ -512,12 +536,13 @@
       </button>
     {/if}
 
-    {#if $installationStatus[mod.title] && $updateAvailableStore[mod.title] && !mod.orphaned}
+    {#if $installationStatus[mod.title] && updateAvailable && !mod.orphaned}
       <!-- Update button (when installed and update available) -->
       <button
         class="update-button"
         onclick={updateMod}
         disabled={$loadingStates[mod.title]}
+        title={mod.multiplayer ? "Update from the Multiplayer tab" : undefined}
       >
         {#if $loadingStates[mod.title]}
           <div class="spinner"></div>
@@ -546,12 +571,18 @@
     {/if}
 
     {#if $installationStatus[mod.title]}
-      <button class="delete-button" title="Remove Mod" onclick={uninstallMod}>
+      <button
+        class="delete-button"
+        title={mod.multiplayer
+          ? "Uninstall from the Multiplayer tab"
+          : "Remove Mod"}
+        onclick={uninstallMod}
+      >
         <Trash2 size={18} />
       </button>
     {/if}
 
-    {#if !mod.orphaned}
+    {#if !mod.orphaned && !mod.multiplayer}
       <button
         class="collection-button"
         title="Add to collection"
@@ -699,6 +730,10 @@
 
   .badge.source.thunderstore {
     background: rgba(35, 87, 140, 0.92);
+  }
+
+  .badge.multiplayer {
+    background: rgba(214, 120, 30, 0.95);
   }
 
   .badge.deprecated {
@@ -863,6 +898,11 @@
 
   .mod-card.desc-hidden .button-container {
     bottom: 0.4rem;
+  }
+
+  .mod-info > p.desc-fallback {
+    opacity: 0.65;
+    font-style: italic;
   }
 
   /* Description skeleton */

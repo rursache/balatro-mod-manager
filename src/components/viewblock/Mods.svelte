@@ -85,8 +85,10 @@
     checkModInCache,
     fetchCachedMods,
     forceRefreshCache,
+    refreshMultiplayerStatus,
     syncInstalledPlaceholders,
   } from "../../stores/modCache";
+  import { multiplayerUninstallRequest } from "../../stores/multiplayerStatus";
   import {
     hasActionableUpdate,
     isBrowsableMod,
@@ -133,7 +135,11 @@
     indexInstalledRows,
   } from "../../utils/installedPlaceholders";
   import { installedModsCache } from "../../stores/modCache";
-  import { CATALOG_CATEGORIES, tabForCategory } from "../../utils/mainTabs";
+  import {
+    CATALOG_CATEGORIES,
+    MULTIPLAYER_CATEGORY,
+    tabForCategory,
+  } from "../../utils/mainTabs";
 
   /** Max parallel mod-update invocations to keep the Tauri IPC queue healthy. */
   const UPDATE_ALL_CONCURRENCY = 6;
@@ -250,6 +256,7 @@
   async function handleBulkUninstall(ids: string[]) {
     let successCount = 0;
     let failCount = 0;
+    let multiplayerSkipped = 0;
 
     // Fetch installed mods from database to get correct paths (like uninstallMod does)
     await getAllInstalledMods();
@@ -261,6 +268,11 @@
           // Local mod - delete by path
           await invoke("delete_manual_mod", { path: localPath });
         } else {
+          // Multiplayer tracks have their own removal rules, only that tab uninstalls them
+          if ($modsStore.some((m) => m.title === id && m.multiplayer)) {
+            multiplayerSkipped++;
+            continue;
+          }
           // Catalog mod - find the installed mod to get the correct path
           const installedMod = installedMods.find(
             (m) => m.name.toLowerCase() === id.toLowerCase(),
@@ -292,8 +304,14 @@
         `Uninstalled ${successCount} mods, ${failCount} failed`,
         "warning",
       );
-    } else {
+    } else if (successCount > 0 || multiplayerSkipped === 0) {
       addMessage(`Uninstalled ${successCount} mods`, "success");
+    }
+    if (multiplayerSkipped > 0) {
+      addMessage(
+        "Multiplayer packages were kept, uninstall them from the Multiplayer tab",
+        "info",
+      );
     }
 
     clearSelection();
@@ -862,7 +880,32 @@
     }
   };
 
+  function openMultiplayerTab() {
+    currentModView.set(null);
+    clearSelection();
+    currentCategory.set(MULTIPLAYER_CATEGORY);
+  }
+
+  // The Multiplayer tab removes a track with its game modes and copied DLLs, so
+  // uninstalling a Multiplayer card opens its confirmation there
+  function uninstallMultiplayer(mod: Mod) {
+    const role = mod.multiplayer?.role;
+    if (role === "legacy" || role === "api") {
+      multiplayerUninstallRequest.set({ track: role });
+    } else {
+      addMessage(
+        "Game modes are removed together with the Multiplayer API in the Multiplayer tab",
+        "info",
+      );
+    }
+    openMultiplayerTab();
+  }
+
   const uninstallMod = async (mod: Mod) => {
+    if (mod.multiplayer) {
+      uninstallMultiplayer(mod);
+      return;
+    }
     const isCoreMod = ["steamodded", "talisman"].includes(
       mod.title.toLowerCase(),
     );
@@ -929,6 +972,7 @@
       const modsToUpdate = $modsStore.filter(
         (mod) =>
           !mod.orphaned &&
+          !mod.multiplayer &&
           $installationStatus[mod.title] &&
           $updateAvailableStore[mod.title],
       );
@@ -1972,6 +2016,11 @@
   }
 
   function handleModClick(mod: Mod) {
+    // Multiplayer packages have no catalog entry, their page is the Multiplayer tab
+    if (mod.multiplayer) {
+      openMultiplayerTab();
+      return;
+    }
     currentModView.set(mod);
   }
 
@@ -2873,7 +2922,8 @@
 
   async function refreshInstalledMods() {
     try {
-      await forceRefreshCache();
+      const installed = await forceRefreshCache();
+      void refreshMultiplayerStatus(installed);
       await refreshStateSummary();
     } catch (error) {
       console.error("Failed to refresh installed mods:", error);

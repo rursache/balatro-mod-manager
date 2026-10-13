@@ -6,8 +6,11 @@ import type { InstalledMod } from "./modStore";
 import { installationStatus, modsStore } from "./modStore";
 import {
   computeInstallationStatus,
+  mayBeMultiplayerRow,
   reconcileInstalledPlaceholders,
 } from "../utils/installedPlaceholders";
+import { multiplayerStatusStore } from "./multiplayerStatus";
+import type { MultiplayerStatus } from "../utils/multiplayer";
 
 declare global {
   // eslint-disable-next-line no-unused-vars
@@ -34,7 +37,11 @@ function updateInstallationStatus(installed: InstalledMod[]) {
  */
 export function syncInstalledPlaceholders(installed: InstalledMod[]) {
   const before = get(modsStore);
-  const after = reconcileInstalledPlaceholders(before, installed);
+  const after = reconcileInstalledPlaceholders(
+    before,
+    installed,
+    get(multiplayerStatusStore),
+  );
   if (after !== before) modsStore.set(after);
   updateInstallationStatus(installed);
 }
@@ -78,6 +85,9 @@ const createModCache = () => {
             cache.set(formattedMods);
             syncInstalledPlaceholders(formattedMods);
             lastFetchTime = Date.now();
+            if (!get(multiplayerStatusStore)) {
+              void refreshMultiplayerStatus(formattedMods);
+            }
             return formattedMods;
           })();
         }
@@ -122,6 +132,44 @@ const createModCache = () => {
 
 // Create a single instance of the cache system
 const modCache = createModCache();
+
+let multiplayerInFlight: Promise<MultiplayerStatus | null> | null = null;
+
+/**
+ * Loads the Multiplayer tab status when a Multiplayer package is installed, so its
+ * Installed card gets the package icon, description and update state of that tab
+ */
+export function refreshMultiplayerStatus(
+  installed: InstalledMod[] = get(modCache.installedModsCache),
+): Promise<MultiplayerStatus | null> {
+  if (!installed.some(mayBeMultiplayerRow)) {
+    return Promise.resolve(get(multiplayerStatusStore));
+  }
+  if (!multiplayerInFlight) {
+    multiplayerInFlight = invoke<MultiplayerStatus>("multiplayer_status")
+      .then((status) => {
+        multiplayerStatusStore.set(status);
+        return status;
+      })
+      .catch((error) => {
+        console.warn("Failed to load the Multiplayer status:", error);
+        return get(multiplayerStatusStore);
+      })
+      .finally(() => {
+        multiplayerInFlight = null;
+      });
+  }
+  return multiplayerInFlight;
+}
+
+// A new status (from here or the Multiplayer tab) refreshes the Multiplayer cards
+let lastStatus: MultiplayerStatus | null = null;
+multiplayerStatusStore.subscribe((status) => {
+  if (status === lastStatus) return;
+  lastStatus = status;
+  const installed = get(modCache.installedModsCache);
+  if (installed.length > 0) syncInstalledPlaceholders(installed);
+});
 
 // Listen for backend notifications that installed mods have changed,
 // and refresh the cache immediately to update the UI in real-time.

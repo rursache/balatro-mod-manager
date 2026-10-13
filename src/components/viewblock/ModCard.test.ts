@@ -1,7 +1,12 @@
-import { render, screen } from "@testing-library/svelte";
+import { fireEvent, render, screen } from "@testing-library/svelte";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import ModCard from "./ModCard.svelte";
-import type { Mod, ThunderstoreInfo } from "../../stores/modStore";
+import {
+  installationStatus,
+  updateAvailableStore,
+  type Mod,
+  type ThunderstoreInfo,
+} from "../../stores/modStore";
 
 const invokeMock = vi.hoisted(() => vi.fn());
 
@@ -106,5 +111,83 @@ describe("ModCard badges", () => {
     expect(document.querySelector(".meta-owner")?.textContent).toContain(
       "nh6574",
     );
+  });
+});
+
+const placeholder = (extra: Partial<Mod> = {}): Mod =>
+  mod({
+    title: "Multiplayer",
+    description: "",
+    publisher: "BalatroMultiplayer",
+    installed: true,
+    installedVersion: "0.5.7",
+    _installedPath: "/Mods/BalatroMultiplayer-Multiplayer",
+    ...extra,
+  });
+
+const multiplayer = (updateAvailable = false) => ({
+  role: "legacy" as const,
+  fullName: "BalatroMultiplayer-Multiplayer",
+  latestVersion: "0.5.8",
+  updateAvailable,
+});
+
+describe("ModCard installed placeholders", () => {
+  beforeEach(() => {
+    invokeMock.mockReset();
+    invokeMock.mockResolvedValue(null);
+    installationStatus.set({ Multiplayer: true });
+    updateAvailableStore.set({});
+  });
+
+  it("shows a fallback instead of an endless skeleton without a description", () => {
+    render(ModCard, { mod: placeholder() });
+    expect(document.querySelector(".desc-skeleton")).toBeNull();
+    expect(screen.getByText("No description available")).toBeTruthy();
+  });
+
+  it("keeps the skeleton for catalog cards still loading their description", () => {
+    render(ModCard, { mod: mod({ description: "", _dirName: "jd@nh" }) });
+    expect(document.querySelector(".desc-skeleton")).not.toBeNull();
+  });
+
+  it("labels Multiplayer packages with owner, version and badge", () => {
+    render(ModCard, {
+      mod: placeholder({
+        description: "Legacy standalone Balatro Multiplayer mod",
+        multiplayer: multiplayer(),
+      }),
+    });
+    expect(badgeTexts()).toEqual(["Multiplayer"]);
+    expect(document.querySelector(".meta-owner")?.textContent).toContain(
+      "BalatroMultiplayer",
+    );
+    expect(document.querySelector(".tag.version")?.textContent).toContain(
+      "0.5.7",
+    );
+    expect(document.querySelector(".tag.orphaned")).toBeNull();
+    expect(document.querySelector(".collection-button")).toBeNull();
+  });
+
+  it("shows the Multiplayer tab update state and opens that tab to update", async () => {
+    // A stale summary flag does not matter, the Multiplayer status decides
+    updateAvailableStore.set({ Multiplayer: false });
+    const onmodclick = vi.fn();
+    const oninstallclick = vi.fn();
+    render(ModCard, {
+      mod: placeholder({ multiplayer: multiplayer(true) }),
+      onmodclick,
+      oninstallclick,
+    });
+    const update = screen.getByText("Update").closest("button")!;
+    await fireEvent.click(update);
+    expect(onmodclick).toHaveBeenCalledTimes(1);
+    expect(oninstallclick).not.toHaveBeenCalled();
+  });
+
+  it("hides Update when the Multiplayer tab reports none", () => {
+    updateAvailableStore.set({ Multiplayer: true });
+    render(ModCard, { mod: placeholder({ multiplayer: multiplayer(false) }) });
+    expect(screen.queryByText("Update")).toBeNull();
   });
 });

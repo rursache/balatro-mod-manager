@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, untrack } from "svelte";
   import { fade, scale } from "svelte/transition";
   import { invoke } from "@tauri-apps/api/core";
   import { listen } from "@tauri-apps/api/event";
@@ -25,6 +25,10 @@
   import LaunchAlertBox from "../LaunchAlertBox.svelte";
   import { BET_DOWNLOAD_URL } from "../../constants/links";
   import { lovelyPopupStore } from "../../stores/modStore";
+  import {
+    multiplayerStatusStore,
+    multiplayerUninstallRequest,
+  } from "../../stores/multiplayerStatus";
   import { modal } from "../../utils/modalStack";
   import { launchBalatro } from "../../utils/launch";
   import {
@@ -145,6 +149,7 @@
       const next = await invoke<MultiplayerStatus>("multiplayer_status");
       if (destroyed) return;
       status = next;
+      multiplayerStatusStore.set(next);
       loadError = null;
       if (!trackChosen) selectedTrack = defaultTrack(next);
       selectedModes = selectedModes.filter((name) =>
@@ -351,6 +356,19 @@
       busy = null;
     }
   }
+
+  // An Installed card asked to uninstall a track, confirm it here with the exact preview
+  $effect(() => {
+    const request = $multiplayerUninstallRequest;
+    if (!request || !status || busy) return;
+    multiplayerUninstallRequest.set(null);
+    const current = status;
+    untrack(() => {
+      if (!trackInfo(current, request.track)?.installed) return;
+      selectTrack(request.track);
+      startUninstall();
+    });
+  });
 
   function cancelConfirm() {
     confirm = null;

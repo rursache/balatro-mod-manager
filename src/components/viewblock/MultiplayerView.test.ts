@@ -3,6 +3,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import MultiplayerView from "./MultiplayerView.svelte";
 import { openExternal } from "$lib/opener";
 import { isModalOpen, resetModalStack } from "../../utils/modalStack";
+import { get } from "svelte/store";
+import {
+  multiplayerStatusStore,
+  multiplayerUninstallRequest,
+} from "../../stores/multiplayerStatus";
 import type { MultiplayerStatus, TrackPlan } from "../../utils/multiplayer";
 import {
   manualLegacyCopy,
@@ -245,6 +250,36 @@ describe("MultiplayerView", () => {
 
     await waitFor(() => expect(isModalOpen()).toBe(false));
     expect(invoked("multiplayer_install")).toHaveLength(0);
+  });
+
+  it("shares its status with the Installed cards", async () => {
+    const status = legacyInstalled();
+    mockBackend(status);
+    await renderView();
+    expect(get(multiplayerStatusStore)).toEqual(status);
+  });
+
+  it("opens the uninstall dialog an Installed card asked for", async () => {
+    mockBackend(legacyInstalled(), {
+      multiplayer_uninstall: { track: "legacy", removed: [], removed_dlls: [] },
+    });
+    multiplayerUninstallRequest.set({ track: "legacy" });
+    await renderView();
+
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog.textContent).toContain("Uninstall Multiplayer?");
+    expect(get(multiplayerUninstallRequest)).toBeNull();
+    // Nothing is removed until the user confirms
+    expect(invoked("multiplayer_uninstall")).toHaveLength(0);
+  });
+
+  it("drops an uninstall request for a track that is not installed", async () => {
+    mockBackend(legacyInstalled());
+    multiplayerUninstallRequest.set({ track: "api" });
+    await renderView();
+
+    await waitFor(() => expect(get(multiplayerUninstallRequest)).toBeNull());
+    expect(screen.queryByRole("dialog")).toBeNull();
   });
 
   it("lists exactly what uninstalling the API removes and keeps", async () => {

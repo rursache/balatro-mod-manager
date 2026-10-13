@@ -39,6 +39,15 @@ export interface ThunderstoreInfo {
   description: string;
 }
 
+/** An official BalatroMultiplayer package, managed from the Multiplayer tab */
+export interface MultiplayerCard {
+  role: "legacy" | "api" | "gamemode";
+  /** Thunderstore `Namespace-Name`, null for a manual legacy copy */
+  fullName: string | null;
+  latestVersion: string | null;
+  updateAvailable: boolean;
+}
+
 export interface Mod {
   id?: string;
   title: string;
@@ -78,6 +87,7 @@ export interface Mod {
   deprecated?: boolean;
   nsfw?: boolean;
   aiGenerated?: boolean;
+  multiplayer?: MultiplayerCard;
 }
 
 export interface LocalMod {
