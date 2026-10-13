@@ -137,7 +137,7 @@ fn parse_archive_name(filename: &str) -> Result<(String, ArchiveKind), String> {
     let base = filename.rsplit(['/', '\\']).next().unwrap_or_default();
     let (stem, kind) = ARCHIVE_EXTENSIONS
         .iter()
-        .find_map(|(ext, kind)| base.strip_suffix(ext).map(|stem| (stem, *kind)))
+        .find_map(|(ext, kind)| strip_suffix_ignore_ascii_case(base, ext).map(|stem| (stem, *kind)))
         .ok_or_else(|| {
             "Unsupported file format. Only ZIP, TAR, TAR.GZ, RAR, and 7Z are supported.".to_string()
         })?;
@@ -145,6 +145,12 @@ fn parse_archive_name(filename: &str) -> Result<(String, ArchiveKind), String> {
         return Err(format!("Invalid mod archive name: {filename}"));
     }
     Ok((stem.to_string(), kind))
+}
+
+fn strip_suffix_ignore_ascii_case<'a>(s: &'a str, suffix: &str) -> Option<&'a str> {
+    let split = s.len().checked_sub(suffix.len())?;
+    let tail = s.get(split..)?;
+    tail.eq_ignore_ascii_case(suffix).then(|| &s[..split])
 }
 
 fn is_valid_mod_dir_name(name: &str) -> bool {
@@ -758,6 +764,14 @@ mod tests {
             ("TestMod.rar", "TestMod", ArchiveKind::Rar),
             ("TestMod.7z", "TestMod", ArchiveKind::SevenZ),
             ("Test.Mod-1.2.zip", "Test.Mod-1.2", ArchiveKind::Zip),
+            ("Mod.ZIP", "Mod", ArchiveKind::Zip),
+            ("Mod.Tar", "Mod", ArchiveKind::Tar),
+            ("Mod.TAR.GZ", "Mod", ArchiveKind::TarGz),
+            ("Mod.Tar.Gz", "Mod", ArchiveKind::TarGz),
+            ("Mod.TGZ", "Mod", ArchiveKind::TarGz),
+            ("Mod.RAR", "Mod", ArchiveKind::Rar),
+            ("Mod.7Z", "Mod", ArchiveKind::SevenZ),
+            ("Módé.ZIP", "Módé", ArchiveKind::Zip),
         ];
         for (filename, name, kind) in cases {
             assert_eq!(
@@ -779,6 +793,35 @@ mod tests {
         ] {
             assert_eq!(parse_archive_name(filename).unwrap().0, "x", "{filename}");
         }
+    }
+
+    #[test]
+    fn test_parse_archive_name_rejects_unknown_extensions() {
+        for filename in ["Mod", "Mod.gz", "Mod.7zip", "é"] {
+            let err = parse_archive_name(filename).unwrap_err();
+            assert!(err.contains("Unsupported file format"), "{filename}");
+        }
+    }
+
+    #[test]
+    fn test_extract_archive_accepts_uppercase_extension() {
+        let temp_dir = TempDir::new().unwrap();
+        let mod_dir = extract_archive_from_reader(
+            "MyMod.ZIP",
+            Cursor::new(zip_with_init()),
+            None,
+            temp_dir.path(),
+        )
+        .unwrap();
+        assert_eq!(mod_dir, temp_dir.path().join("MyMod"));
+        assert!(mod_dir.join("init.lua").exists());
+
+        let tar = gzip(&raw_tar(&[RawEntry::File("init.lua", b"-- mod")]));
+        let mod_dir =
+            extract_archive_from_reader("Other.TAR.GZ", Cursor::new(tar), None, temp_dir.path())
+                .unwrap();
+        assert_eq!(mod_dir, temp_dir.path().join("Other"));
+        assert!(mod_dir.join("init.lua").exists());
     }
 
     #[test]

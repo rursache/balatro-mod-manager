@@ -4,6 +4,7 @@
   import { addMessage } from "$lib/stores";
   import { webviewWindow } from "@tauri-apps/api";
   import { Archive } from "lucide-svelte";
+  import { isSupportedArchive } from "../utils/archive";
 
   let isProcessing = false;
   let isDragging = false;
@@ -40,14 +41,7 @@
           for (const filePath of paths) {
             try {
               // Check if it's a supported file type
-              if (
-                !filePath.endsWith(".zip") &&
-                !filePath.endsWith(".tar") &&
-                !filePath.endsWith(".tar.gz") &&
-                !filePath.endsWith(".tgz") &&
-                !filePath.endsWith(".rar") &&
-                !filePath.endsWith(".7z")
-              ) {
+              if (!isSupportedArchive(filePath)) {
                 addMessage(
                   `Skipped ${filePath}: Only ZIP, TAR, TAR.GZ, RAR, and 7Z archives are supported`,
                   "warning",
