@@ -1,9 +1,10 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   activateFocusedElement,
   findNearestFocusTarget,
   getFocusableElements,
   handleControllerButtons,
+  startControllerNavigation,
 } from "./controllerNavigation";
 
 function rect(
@@ -100,5 +101,59 @@ describe("controllerNavigation", () => {
 
     expect(onCancel).toHaveBeenCalledTimes(2);
     expect(onConfirm).not.toHaveBeenCalled();
+  });
+
+  describe("polling loop", () => {
+    let gamepads: (Gamepad | null)[];
+    let rafMock: ReturnType<typeof vi.fn>;
+    let cancelRafMock: ReturnType<typeof vi.fn>;
+
+    function gamepadEvent(type: string, index: number) {
+      const event = new Event(type);
+      Object.defineProperty(event, "gamepad", { value: { index } });
+      window.dispatchEvent(event);
+    }
+
+    beforeEach(() => {
+      gamepads = [null, null];
+      rafMock = vi.fn(() => 1);
+      cancelRafMock = vi.fn();
+      vi.stubGlobal("requestAnimationFrame", rafMock);
+      vi.stubGlobal("cancelAnimationFrame", cancelRafMock);
+      Object.defineProperty(navigator, "getGamepads", {
+        configurable: true,
+        value: () => gamepads,
+      });
+    });
+
+    afterEach(() => {
+      vi.unstubAllGlobals();
+      Reflect.deleteProperty(navigator, "getGamepads");
+    });
+
+    it("only polls while a gamepad is connected", () => {
+      const stop = startControllerNavigation({ onCancel: vi.fn() });
+      expect(rafMock).not.toHaveBeenCalled();
+
+      gamepads[0] = { index: 0 } as Gamepad;
+      gamepadEvent("gamepadconnected", 0);
+      expect(rafMock).toHaveBeenCalledTimes(1);
+
+      gamepads[0] = null;
+      gamepadEvent("gamepaddisconnected", 0);
+      expect(cancelRafMock).toHaveBeenCalled();
+
+      rafMock.mockClear();
+      stop();
+      gamepadEvent("gamepadconnected", 1);
+      expect(rafMock).not.toHaveBeenCalled();
+    });
+
+    it("starts right away when a gamepad is already connected", () => {
+      gamepads[1] = { index: 1 } as Gamepad;
+      const stop = startControllerNavigation({ onCancel: vi.fn() });
+      expect(rafMock).toHaveBeenCalledTimes(1);
+      stop();
+    });
   });
 });

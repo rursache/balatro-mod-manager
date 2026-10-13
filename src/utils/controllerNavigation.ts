@@ -233,17 +233,20 @@ export function startControllerNavigation(
   }
 
   let frame = 0;
+  let running = false;
   let stopped = false;
   let previousButtons = new Set<number>();
   let heldDirection: Direction | null = null;
   let nextMoveAt = 0;
+  // Only poll while a pad is connected so idle windows get no rAF wakeups
+  const connected = new Set<number>();
 
   const repeatDelayMs = options.repeatDelayMs ?? 320;
   const repeatIntervalMs = options.repeatIntervalMs ?? 150;
   const axisThreshold = options.axisThreshold ?? 0.55;
 
   const tick = (now: number) => {
-    if (stopped) return;
+    if (stopped || !running) return;
 
     const root = resolveRoot(options.root);
     const gamepads = Array.from(navigator.getGamepads()).filter(
@@ -273,11 +276,43 @@ export function startControllerNavigation(
     frame = window.requestAnimationFrame(tick);
   };
 
-  frame = window.requestAnimationFrame(tick);
+  const startLoop = () => {
+    if (running || stopped) return;
+    running = true;
+    frame = window.requestAnimationFrame(tick);
+  };
+
+  const stopLoop = () => {
+    running = false;
+    window.cancelAnimationFrame(frame);
+    previousButtons = new Set();
+    heldDirection = null;
+    nextMoveAt = 0;
+  };
+
+  const onConnected = (event: GamepadEvent) => {
+    connected.add(event.gamepad.index);
+    startLoop();
+  };
+
+  const onDisconnected = (event: GamepadEvent) => {
+    connected.delete(event.gamepad.index);
+    if (connected.size === 0) stopLoop();
+  };
+
+  window.addEventListener("gamepadconnected", onConnected);
+  window.addEventListener("gamepaddisconnected", onDisconnected);
+
+  for (const gamepad of navigator.getGamepads()) {
+    if (gamepad) connected.add(gamepad.index);
+  }
+  if (connected.size > 0) startLoop();
 
   return () => {
     stopped = true;
-    window.cancelAnimationFrame(frame);
+    stopLoop();
+    window.removeEventListener("gamepadconnected", onConnected);
+    window.removeEventListener("gamepaddisconnected", onDisconnected);
     clearControllerFocus(resolveRoot(options.root));
   };
 }
