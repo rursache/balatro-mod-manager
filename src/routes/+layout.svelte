@@ -24,6 +24,7 @@
   import { invoke } from "@tauri-apps/api/core";
   import { startControllerNavigation } from "../utils/controllerNavigation";
   import { getTopModal } from "../utils/modalStack";
+  import { isReleaseVersion, isUpdateAvailable } from "../utils/appVersion";
 
   const { data, children } = $props();
 
@@ -31,35 +32,12 @@
   let detectedPlatform: string | null = null;
   let stopControllerNavigation: (() => void) | null = null;
 
-  function normalize(v: string): string {
-    // strip leading 'v' and any pre-release metadata
-    const t = v.trim().replace(/^v/i, "");
-    // keep only digits and dots prefix
-    const m = t.match(/^[0-9]+(?:\.[0-9]+)*/);
-    return m ? m[0] : t;
-  }
-
-  function cmp(a: string, b: string): number {
-    const as = normalize(a)
-      .split(".")
-      .map((n) => parseInt(n, 10));
-    const bs = normalize(b)
-      .split(".")
-      .map((n) => parseInt(n, 10));
-    const len = Math.max(as.length, bs.length);
-    for (let i = 0; i < len; i++) {
-      const ai = as[i] ?? 0;
-      const bi = bs[i] ?? 0;
-      if (ai < bi) return -1;
-      if (ai > bi) return 1;
-    }
-    return 0;
-  }
-
   async function checkForUpdate() {
     try {
       if ($updatePromptDisabled) return;
       const cur = await invoke<string>("get_app_version");
+      // Commit hash and dev builds are not comparable with releases
+      if (!isReleaseVersion(cur)) return;
       let tag = "";
       const headers = { Accept: "application/vnd.github+json" };
       const relRes = await fetch(APP_LATEST_RELEASE_API, { headers });
@@ -79,7 +57,7 @@
       }
       if (!tag) return;
       const latest = tag.replace(/^v/i, "");
-      if (cmp(cur, latest) < 0) {
+      if (isUpdateAvailable(cur, latest)) {
         updatePopupStore.set({
           visible: true,
           currentVersion: cur,

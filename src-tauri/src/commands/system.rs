@@ -12,38 +12,33 @@ pub async fn check_balatro_running() -> bool {
 
 #[tauri::command]
 pub async fn get_app_version() -> String {
-    // Compile-time crate version from Cargo.toml
-    env!("CARGO_PKG_VERSION").to_string()
+    crate::APP_VERSION.to_string()
 }
 
 #[cfg(test)]
 mod tests {
     #[test]
-    fn test_cargo_pkg_version_is_valid_semver() {
-        let version = env!("CARGO_PKG_VERSION");
-        assert!(!version.is_empty());
-        // Should have at least major.minor format
-        let parts: Vec<&str> = version.split('.').collect();
-        assert!(parts.len() >= 2, "Version should have at least major.minor");
-        // All parts should be numeric (or contain valid prerelease suffix)
-        for (i, part) in parts.iter().enumerate() {
-            if i < 2 {
-                // Major and minor must be numeric
-                assert!(
-                    part.chars().all(|c| c.is_ascii_digit()),
-                    "Major/minor version parts must be numeric"
-                );
-            }
-        }
+    fn app_version_is_resolved_at_build_time() {
+        let version = crate::APP_VERSION;
+        assert!(!version.trim().is_empty());
+        assert_eq!(version, version.trim());
+        assert!(
+            !version.starts_with(['v', 'V'])
+                || !version[1..].starts_with(|c: char| c.is_ascii_digit()),
+            "tag prefix should be stripped: {version}"
+        );
     }
 
     #[test]
-    fn test_cargo_pkg_version_not_placeholder() {
+    fn bundle_version_stays_static_semver() {
         let version = env!("CARGO_PKG_VERSION");
-        assert_ne!(version, "0.0.0", "Version should not be placeholder");
+        let core = version.split(['-', '+']).next().unwrap_or_default();
+        let parts: Vec<&str> = core.split('.').collect();
+        assert_eq!(parts.len(), 3, "bundle version must be major.minor.patch");
         assert!(
-            !version.contains("SNAPSHOT"),
-            "Version should not contain SNAPSHOT"
+            parts
+                .iter()
+                .all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()))
         );
     }
 }

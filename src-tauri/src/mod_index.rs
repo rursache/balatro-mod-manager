@@ -38,7 +38,7 @@ static HTTP: Lazy<reqwest::Client> = Lazy::new(|| {
     reqwest::Client::builder()
         .user_agent(format!(
             "balatro-mod-manager/{} (+{})",
-            env!("CARGO_PKG_VERSION"),
+            crate::APP_VERSION,
             crate::links::APP_REPO_URL
         ))
         .timeout(Duration::from_secs(15))

@@ -4,6 +4,7 @@
   let ShaderBackgroundComp = $state<Component | null>(null);
   import About from "../../components/viewblock/About.svelte";
   import LaunchButton from "../../components/LaunchButton.svelte";
+  import { formatVersion } from "../../utils/appVersion";
   import Mods from "../../components/viewblock/Mods.svelte";
   import ModView from "../../components/viewblock/ModView.svelte";
   import Settings from "../../components/viewblock/Settings.svelte";
@@ -395,7 +396,7 @@
       <h1 data-tauri-drag-region>Balatro Mod Manager</h1>
       {#if appVersion}
         <span class="app-version" data-testid="header-version"
-          >v{appVersion}</span
+          >{formatVersion(appVersion)}</span
         >
       {/if}
     </div>

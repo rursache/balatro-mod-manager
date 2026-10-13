@@ -61,7 +61,7 @@ static NO_REDIRECT_HTTP: Lazy<reqwest::Client> = Lazy::new(|| {
     reqwest::Client::builder()
         .user_agent(format!(
             "balatro-mod-manager/{} (+{})",
-            env!("CARGO_PKG_VERSION"),
+            crate::APP_VERSION,
             crate::links::APP_REPO_URL
         ))
         .redirect(reqwest::redirect::Policy::none())

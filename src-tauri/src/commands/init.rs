@@ -27,7 +27,7 @@ pub struct AppInitData {
 #[tauri::command]
 pub async fn get_app_init_data(state: tauri::State<'_, AppState>) -> Result<AppInitData, String> {
     // 1. App version (compile-time constant, no DB access needed)
-    let version = env!("CARGO_PKG_VERSION").to_string();
+    let version = crate::APP_VERSION.to_string();
 
     // 2-5. Extract all DB values in one scoped block
     let (existing_installation, security_acknowledged, lovely_installed, launch_mode) = {

@@ -55,6 +55,12 @@ describe("About view", () => {
     expect(screen.getByText("Current version: v1.2.3")).toBeTruthy();
   });
 
+  it("shows commit hash builds without a v prefix", () => {
+    render(About, { props: { version: "aff48df" } });
+
+    expect(screen.getByText("Current version: aff48df")).toBeTruthy();
+  });
+
   it("hides the version line until the version is known", () => {
     render(About);
 

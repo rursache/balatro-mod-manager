@@ -1,3 +1,5 @@
+#[cfg(test)]
+mod app_version;
 mod assets;
 mod catalog;
 pub mod commands;
@@ -28,6 +30,9 @@ use bmm_lib::{
 use crate::models::{ModsChangedEvent, Payload};
 use crate::state::AppState;
 use crate::util::map_error;
+
+/// Version shown in the UI, resolved by build.rs from BMM_VERSION, the git tag or the commit
+pub const APP_VERSION: &str = env!("BMM_VERSION");
 
 #[tauri::command]
 fn exit_application(app_handle: tauri::AppHandle) {

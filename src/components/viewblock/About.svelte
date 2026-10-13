@@ -2,6 +2,7 @@
   import { BookOpen, Bug } from "lucide-svelte";
   import { reportIssueStore } from "../../stores/modStore";
   import Github from "../GithubIcon.svelte";
+  import { formatVersion } from "../../utils/appVersion";
   import { openExternal } from "$lib/opener";
   import {
     APP_REPO_URL,
@@ -65,7 +66,7 @@
       </div>
 
       {#if version}
-        <p id="versiontext">Current version: v{version}</p>
+        <p id="versiontext">Current version: {formatVersion(version)}</p>
       {/if}
     </div>
 
