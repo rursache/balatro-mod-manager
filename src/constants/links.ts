@@ -11,3 +11,5 @@ export const WIKI_URL = "https://balatromods.miraheze.org/wiki/Main_Page";
 export const INDEX_REPO = "kasimeka/balatro-mod-index";
 export const INDEX_BRANCH = "main";
 export const INDEX_REPO_URL = `https://github.com/${INDEX_REPO}`;
+
+export const BET_DOWNLOAD_URL = "https://new.balatromp.com/download";
