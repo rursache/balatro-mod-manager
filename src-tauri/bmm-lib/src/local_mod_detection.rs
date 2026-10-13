@@ -1012,6 +1012,9 @@ pub fn detect_manual_mods(
     let managed_names: HashSet<String> =
         managed_mods.iter().map(|m| m.name.to_lowercase()).collect();
     let managed_catalog_names = managed_names.clone();
+    let steamodded_tracked = managed_mods
+        .iter()
+        .any(|m| m.name.eq_ignore_ascii_case("steamodded") && Path::new(&m.path).exists());
 
     let mut manual_mods = Vec::new();
     let mut bundled_dependencies = HashSet::new();
@@ -1071,6 +1074,12 @@ pub fn detect_manual_mods(
 
         // If this mod is not managed by path, consider it a manual mod
         if !is_path_managed(&mod_path, &managed_paths) {
+            if steamodded_tracked && is_untracked_steamodded_copy(&mod_info) {
+                flag_steamodded_duplicate(&mut mod_info);
+                manual_mods.push(mod_info);
+                continue;
+            }
+
             // Check for name duplication with managed mods
             let mod_name_lower = mod_info.name.to_lowercase();
             if managed_names.contains(&mod_name_lower) {
@@ -1100,6 +1109,28 @@ pub fn detect_manual_mods(
     );
 
     Ok(manual_mods)
+}
+
+fn is_untracked_steamodded_copy(mod_info: &DetectedMod) -> bool {
+    mod_info.name.eq_ignore_ascii_case("steamodded")
+        || crate::smods_installer::is_steamodded_install(Path::new(&mod_info.path))
+}
+
+/// A second Steamodded next to the tracked one breaks loading, so it is shown
+/// as an explicit duplicate with a plain Remove action instead of a catalog match
+fn flag_steamodded_duplicate(mod_info: &mut DetectedMod) {
+    let folder = Path::new(&mod_info.path)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("this folder")
+        .to_string();
+    mod_info.name = "Steamodded (Duplicate)".to_string();
+    mod_info.id = "Steamodded".to_string();
+    mod_info.description = format!(
+        "Leftover Steamodded copy in {folder}, Steamodded is already installed and managed by the app so remove this copy to keep the game from loading two of them"
+    );
+    mod_info.is_duplicate = true;
+    mod_info.catalog_match = None;
 }
 
 fn scan_for_json_files(dir_path: &Path) -> Result<Vec<PathBuf>, String> {
@@ -1366,21 +1397,12 @@ fn is_path_managed(path: &str, managed_paths: &HashSet<String>) -> bool {
         return true;
     }
 
-    // Check if this path is a subdirectory of a managed path
-    for managed_path in managed_paths {
-        if path.starts_with(managed_path) {
-            return true;
-        }
-    }
-
-    // Check if a managed path is a subdirectory of this path
-    for managed_path in managed_paths {
-        if managed_path.starts_with(path) {
-            return true;
-        }
-    }
-
-    false
+    // Component wise, so a tracked `Mods/Steamodded` does not hide `Mods/Steamodded-old`
+    let path = Path::new(path);
+    managed_paths.iter().any(|managed| {
+        let managed = Path::new(managed);
+        path.starts_with(managed) || managed.starts_with(path)
+    })
 }
 fn find_bundled_dependencies(
     dir: &Path,
@@ -2337,6 +2359,38 @@ mod tests {
 
         // If the managed path is nested under the given path, also true
         assert!(super::is_path_managed("/tmp", &managed));
+
+        // A sibling sharing a name prefix is not managed
+        assert!(!super::is_path_managed("/tmp/base-old", &managed));
+    }
+
+    #[test]
+    fn test_steamodded_copy_is_flagged_as_duplicate() {
+        let td = tempdir().unwrap();
+        let leftover = td.path().join("smods-1.0.0-beta-1814a");
+        write_file(
+            &leftover.join("manifest.json"),
+            r#"{"name": "Steamodded", "version_number": "1.0.0"}"#,
+        );
+
+        let mut detected = super::detect_mod_in_directory(&leftover)
+            .unwrap()
+            .expect("leftover should be detected");
+        assert!(super::is_untracked_steamodded_copy(&detected));
+
+        super::flag_steamodded_duplicate(&mut detected);
+        assert_eq!(detected.name, "Steamodded (Duplicate)");
+        assert!(detected.is_duplicate);
+        assert!(detected.catalog_match.is_none());
+        assert!(detected.description.contains("smods-1.0.0-beta-1814a"));
+
+        let other = td.path().join("JokerDisplay");
+        write_file(
+            &other.join("JokerDisplay.json"),
+            r#"{"id": "JokerDisplay", "name": "JokerDisplay", "author": ["nh6574"], "description": "x", "prefix": "jd", "main_file": "JokerDisplay.lua"}"#,
+        );
+        let other_mod = super::detect_mod_in_directory(&other).unwrap().unwrap();
+        assert!(!super::is_untracked_steamodded_copy(&other_mod));
     }
 
     #[test]
