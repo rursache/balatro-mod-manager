@@ -244,7 +244,7 @@ impl Database {
 
     /// Get a setting value using cached prepared statement.
     /// Returns None if the setting doesn't exist.
-    fn get_setting(&self, setting: &str) -> Result<Option<String>, AppError> {
+    pub fn get_setting(&self, setting: &str) -> Result<Option<String>, AppError> {
         let mut stmt = self
             .conn
             .prepare_cached("SELECT value FROM settings WHERE setting = ?1")?;
@@ -257,11 +257,17 @@ impl Database {
     }
 
     /// Set a setting value using cached prepared statement.
-    fn set_setting(&self, setting: &str, value: &str) -> Result<(), AppError> {
+    pub fn set_setting(&self, setting: &str, value: &str) -> Result<(), AppError> {
         let mut stmt = self
             .conn
             .prepare_cached("INSERT OR REPLACE INTO settings (setting, value) VALUES (?1, ?2)")?;
         stmt.execute([setting, value])?;
+        Ok(())
+    }
+
+    pub fn remove_setting(&self, setting: &str) -> Result<(), AppError> {
+        self.conn
+            .execute("DELETE FROM settings WHERE setting = ?1", [setting])?;
         Ok(())
     }
 
@@ -1644,6 +1650,20 @@ mod tests {
         assert!(row.orphaned);
         assert_eq!(row.source_id.as_deref(), Some("Ns-TsMod"));
         assert_eq!(row.installed_at, Some(42));
+        Ok(())
+    }
+
+    #[test]
+    fn generic_settings_roundtrip() -> Result<(), AppError> {
+        let db = create_memory_db()?;
+        assert_eq!(db.get_setting("multiplayer_copied_dlls")?, None);
+        db.set_setting("multiplayer_copied_dlls", "[\"a\"]")?;
+        assert_eq!(
+            db.get_setting("multiplayer_copied_dlls")?.as_deref(),
+            Some("[\"a\"]")
+        );
+        db.remove_setting("multiplayer_copied_dlls")?;
+        assert_eq!(db.get_setting("multiplayer_copied_dlls")?, None);
         Ok(())
     }
 }
