@@ -4,7 +4,6 @@
   import { addMessage } from "$lib/stores";
   import { invoke } from "@tauri-apps/api/core";
   import { openExternal } from "$lib/opener";
-  import DiscordFab from "./DiscordFab.svelte";
   import { reportIssueStore } from "../stores/modStore";
   import { modal } from "../utils/modalStack";
 
@@ -115,12 +114,11 @@
   }
 </script>
 
-<!-- Floating report button + Discord link -->
+<!-- Floating report button -->
 <div class="fab-group">
   <button class="report-fab" aria-label="Report an issue" onclick={open}>
     <Bug size={16} />
   </button>
-  <DiscordFab />
 </div>
 
 {#if $reportIssueStore.visible}
