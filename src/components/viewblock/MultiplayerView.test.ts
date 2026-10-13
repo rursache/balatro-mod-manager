@@ -161,6 +161,24 @@ describe("MultiplayerView", () => {
     );
   });
 
+  it("keeps the casual badge in the header and the ranked notice under Readiness", async () => {
+    mockBackend(statusFixture());
+    const { container } = await renderView();
+
+    const header = container.querySelector("header.mp-header")!;
+    expect(header.textContent).toContain("Casual and unranked play only");
+    expect(header.textContent).not.toContain("Balatro Essentials Toolkit");
+    expect(header.textContent).not.toContain("reported to Balatro Mod Manager");
+
+    const readiness = screen.getByRole("heading", { name: "Readiness" });
+    const footer = container.querySelector("footer.mp-footer")!;
+    expect(footer.querySelector(".ranked-notice")).not.toBeNull();
+    expect(footer.querySelector(".support-note")).not.toBeNull();
+    expect(readiness.closest("section")!.nextElementSibling === footer).toBe(
+      true,
+    );
+  });
+
   it("disables coming soon modes and enables published ones on the API track", async () => {
     mockBackend(statusFixture());
     await renderView();

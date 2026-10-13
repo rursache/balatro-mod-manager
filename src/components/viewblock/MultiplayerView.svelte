@@ -505,29 +505,6 @@
         Refresh
       </button>
     </div>
-
-    <div class="notice ranked-notice">
-      <ShieldAlert size={22} />
-      <div class="notice-body">
-        <strong
-          >Ranked requires the official Balatro Essentials Toolkit (BET)</strong
-        >
-        <p>
-          BMM installs the official {status?.namespace ?? "BalatroMultiplayer"} packages
-          from Thunderstore for casual lobbies only, ranked matches only work through
-          BET
-        </p>
-        <button class="bet-button" onclick={openBet}>
-          Get BET <ExternalLink size={14} />
-        </button>
-      </div>
-    </div>
-
-    <p class="support-note">
-      <Info size={16} />
-      Issues with this install should be reported to Balatro Mod Manager, not the
-      Multiplayer team
-    </p>
   </header>
 
   {#if loading}
@@ -836,6 +813,31 @@
       </ul>
     </section>
   {/if}
+
+  <footer class="mp-footer">
+    <div class="notice ranked-notice">
+      <ShieldAlert size={22} />
+      <div class="notice-body">
+        <strong
+          >Ranked requires the official Balatro Essentials Toolkit (BET)</strong
+        >
+        <p>
+          BMM installs the official {status?.namespace ?? "BalatroMultiplayer"} packages
+          from Thunderstore for casual lobbies only, ranked matches only work through
+          BET
+        </p>
+        <button class="bet-button" onclick={openBet}>
+          Get BET <ExternalLink size={14} />
+        </button>
+      </div>
+    </div>
+
+    <p class="support-note">
+      <Info size={16} />
+      Issues with this install should be reported to Balatro Mod Manager, not the
+      Multiplayer team
+    </p>
+  </footer>
 </div>
 
 {#if confirm}
@@ -960,12 +962,15 @@
     margin-bottom: 1rem;
   }
 
+  .mp-footer {
+    margin-top: 1.5rem;
+  }
+
   .title-row {
     display: flex;
     align-items: center;
     gap: 1rem;
     flex-wrap: wrap;
-    margin-bottom: 1rem;
   }
 
   h2 {
