@@ -626,6 +626,11 @@ fn cache_is_fresh(cache: &TsCache, last_failed: u64, now: u64) -> bool {
             || now.saturating_sub(last_failed) < FAILED_RETRY_SECS)
 }
 
+/// Nothing cached and the last attempt failed moments ago, offline callers fail fast
+fn failed_recently(last_failed: u64, now: u64) -> bool {
+    last_failed > 0 && now.saturating_sub(last_failed) < FAILED_RETRY_SECS
+}
+
 fn set_last_error(error: Option<String>) {
     *LAST_ERROR.lock().unwrap_or_else(|e| e.into_inner()) = error;
 }
@@ -656,6 +661,10 @@ pub async fn sync(force: bool) -> Result<Vec<TsPackage>, String> {
         let last_failed = LAST_FAILED_SYNC.load(AtomicOrdering::Relaxed);
         if !force && cache_is_fresh(cache, last_failed, now) {
             return Ok(cache.packages.clone());
+        }
+        if !force && cache.packages.is_empty() && failed_recently(last_failed, now) {
+            let error = last_sync_error().unwrap_or_else(|| "the last sync failed".into());
+            return Err(format!("Could not load Thunderstore packages: {error}"));
         }
         (
             cache.clone(),
@@ -1166,6 +1175,10 @@ pub(crate) mod tests {
         assert!(!cache_is_fresh(&cache, 0, now));
         assert!(cache_is_fresh(&cache, now - 30, now));
         assert!(!cache_is_fresh(&cache, now - FAILED_RETRY_SECS, now));
+
+        assert!(!failed_recently(0, now));
+        assert!(failed_recently(now - 5, now));
+        assert!(!failed_recently(now - FAILED_RETRY_SECS, now));
     }
 
     /// Hits the real Thunderstore: `cargo test live_thunderstore -- --ignored --nocapture`

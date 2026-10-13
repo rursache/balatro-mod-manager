@@ -892,6 +892,11 @@ fn load_or_empty(guard: &mut Option<IndexCache>) -> &mut IndexCache {
 }
 
 /// Whether a non-forced sync may skip the network and serve the cached catalog
+/// Nothing cached and the last attempt failed moments ago, offline callers fail fast
+fn failed_recently(last_failed: u64, now: u64) -> bool {
+    last_failed > 0 && now.saturating_sub(last_failed) < INDEX_FAILED_RETRY_SECS
+}
+
 fn cache_is_fresh(cache: &IndexCache, last_failed: u64, now: u64) -> bool {
     !cache.entries.is_empty()
         && (now.saturating_sub(cache.synced_at) < INDEX_MIN_REFRESH_SECS
@@ -907,8 +912,13 @@ pub async fn sync_index(force: bool) -> Result<Vec<ArchiveModItem>, String> {
     let (mut working, generation) = {
         let mut guard = INDEX.lock().await;
         let cache = load_or_empty(&mut guard);
-        if !force && cache_is_fresh(cache, LAST_FAILED_SYNC.load(Ordering::Relaxed), now) {
+        let last_failed = LAST_FAILED_SYNC.load(Ordering::Relaxed);
+        if !force && cache_is_fresh(cache, last_failed, now) {
             return Ok(cache.sorted_items());
+        }
+        if !force && cache.entries.is_empty() && failed_recently(last_failed, now) {
+            let error = last_sync_error().unwrap_or_else(|| "the last sync failed".into());
+            return Err(format!("Could not load the mod index from GitHub: {error}"));
         }
         (cache.clone(), CACHE_GENERATION.load(Ordering::Relaxed))
     };
@@ -1487,6 +1497,9 @@ mod tests {
 
         cache.entries.clear();
         assert!(!cache_is_fresh(&cache, now - 5, now));
+        assert!(failed_recently(now - 5, now));
+        assert!(!failed_recently(0, now));
+        assert!(!failed_recently(now - INDEX_FAILED_RETRY_SECS, now));
     }
 
     #[test]
