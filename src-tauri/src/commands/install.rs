@@ -48,6 +48,25 @@ use crate::models::ModsChangedEvent;
 /// Maximum number of retry attempts for mod installation when rate limited.
 const INSTALL_MAX_RETRIES: u32 = 3;
 
+type InstallLock = std::sync::Arc<tokio::sync::Mutex<()>>;
+static INSTALL_LOCKS: once_cell::sync::Lazy<
+    std::sync::Mutex<std::collections::HashMap<String, InstallLock>>,
+> = once_cell::sync::Lazy::new(Default::default);
+const STEAMODDED_LOCK: &str = "steamodded";
+
+/// Serializes installs into the same folder. Update all runs several installs at once
+/// and two of them can share a dependency or both need a newer Steamodded, while the
+/// installers replace a fixed staging and target folder
+async fn lock_install_target(key: &str) -> tokio::sync::OwnedMutexGuard<()> {
+    let lock = INSTALL_LOCKS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .entry(key.trim().to_ascii_lowercase())
+        .or_default()
+        .clone();
+    lock.lock_owned().await
+}
+
 pub(crate) async fn sync_compat_helper_after_mod_change(state: &tauri::State<'_, AppState>) {
     let enabled = {
         let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
@@ -895,6 +914,7 @@ pub async fn install_steamodded_version(
     state: tauri::State<'_, AppState>,
     version: String,
 ) -> Result<String, String> {
+    let _lock = lock_install_target(STEAMODDED_LOCK).await;
     let installer = ModInstaller::new(ModType::Steamodded);
     let path = installer
         .install_version(&version)
@@ -1104,6 +1124,11 @@ pub async fn install_mod(
         None => crate::catalog::resolve_install_url(&url).await?,
     };
 
+    let lock_key = match &ts_target {
+        Some(target) => format!("{}-{}", target.namespace, target.name),
+        None => folder_name.clone(),
+    };
+    let _lock = lock_install_target(&lock_key).await;
     let (target, resolved_url, folder_name) = (ts_target.as_ref(), &resolved_url, &folder_name_opt);
     let path = with_install_retries(|| async move {
         match target {
@@ -1507,8 +1532,10 @@ pub(crate) async fn run_plan(
     mods_dirs: &[PathBuf],
     run: &mut PlanRun,
 ) -> Result<(), String> {
-    if install_steamodded && plan.steamodded.as_ref().is_some_and(|s| !s.satisfied) {
-        install_steamodded_release(db, "", mods_dirs, run).await?;
+    if install_steamodded
+        && let Some(requirement) = plan.steamodded.as_ref().filter(|s| !s.satisfied)
+    {
+        install_steamodded_release(db, "", Some(requirement), mods_dirs, run).await?;
     }
 
     let mut names_by_package: std::collections::HashMap<String, String> = plan
@@ -1520,7 +1547,7 @@ pub(crate) async fn run_plan(
     for step in &plan.steps {
         match step.source {
             InstallSource::Index if step.catalog_id == crate::catalog::STEAMODDED_ID => {
-                install_steamodded_release(db, &step.version, mods_dirs, run).await?;
+                install_steamodded_release(db, &step.version, None, mods_dirs, run).await?;
             }
             InstallSource::Index => install_index_step(db, step, mods_dirs, run).await?,
             InstallSource::Thunderstore => {
@@ -1535,12 +1562,22 @@ pub(crate) async fn run_plan(
     Ok(())
 }
 
+/// Installs a Steamodded release, the latest for an empty `tag`. With `requirement` the
+/// install is skipped when another install met it while this one waited
 async fn install_steamodded_release(
     db: &std::sync::Mutex<bmm_lib::database::Database>,
     tag: &str,
+    requirement: Option<&install_plan::SteamoddedRequirement>,
     mods_dirs: &[PathBuf],
     run: &mut PlanRun,
 ) -> Result<(), String> {
+    let _lock = lock_install_target(STEAMODDED_LOCK).await;
+    if let Some(requirement) = requirement
+        && steamodded_meets(db, requirement)
+    {
+        log::info!("Steamodded already meets the requirement, skipping its install");
+        return Ok(());
+    }
     let installer = ModInstaller::new(ModType::Steamodded);
     let tag = if tag.trim().is_empty() {
         installer
@@ -1581,6 +1618,24 @@ async fn install_steamodded_release(
     Ok(())
 }
 
+fn steamodded_meets(
+    db: &std::sync::Mutex<bmm_lib::database::Database>,
+    requirement: &install_plan::SteamoddedRequirement,
+) -> bool {
+    let installed = {
+        let db = db.lock().unwrap_or_else(|e| e.into_inner());
+        db.get_installed_mods().unwrap_or_default()
+    };
+    let mods_dir = local_mod_detection::resolve_mods_dir_path().ok();
+    let (present, version) = install_plan::installed_steamodded(&installed, mods_dir.as_deref());
+    present
+        && requirement.min_version.as_deref().is_none_or(|min| {
+            version
+                .as_deref()
+                .is_some_and(|v| bmm_lib::smods_installer::satisfies_min(v, min))
+        })
+}
+
 fn framework_dependencies(step: &PlanStep) -> Vec<String> {
     let mut deps = Vec::new();
     if step.requires_steamodded {
@@ -1600,6 +1655,7 @@ async fn install_index_step(
 ) -> Result<(), String> {
     let url = crate::catalog::resolve_install_url(&step.download_url).await?;
     let folder = Some(step.folder_name.clone()).filter(|f| !f.trim().is_empty());
+    let _lock = lock_install_target(folder.as_deref().unwrap_or(&step.title)).await;
     let (url_ref, folder_ref) = (&url, &folder);
     let path = with_install_retries(|| async move {
         bmm_lib::installer::install_mod(url_ref.clone(), folder_ref.clone())
@@ -1637,6 +1693,23 @@ async fn install_index_step(
     Ok(())
 }
 
+/// Row name of the Thunderstore row tracking `full_name` at `version` or newer
+fn installed_at_least(
+    db: &std::sync::Mutex<bmm_lib::database::Database>,
+    full_name: &str,
+    version: &str,
+) -> Result<Option<String>, String> {
+    let db = db.lock().unwrap_or_else(|e| e.into_inner());
+    Ok(map_error(db.get_installed_by_source_id(full_name))?
+        .filter(|row| row.source == SOURCE_THUNDERSTORE && Path::new(&row.path).is_dir())
+        .filter(|row| {
+            row.current_version
+                .as_deref()
+                .is_some_and(|v| crate::thunderstore::version_at_least(v, version))
+        })
+        .map(|row| row.name))
+}
+
 /// Returns the package and the row name it was recorded under, None for a package
 /// without mod files
 async fn install_thunderstore_step(
@@ -1652,6 +1725,13 @@ async fn install_thunderstore_step(
         .ok_or_else(|| format!("{} has no Thunderstore package", step.title))?;
     let (namespace, name) = crate::thunderstore::split_full_name(full_name)
         .ok_or_else(|| format!("invalid package name '{full_name}'"))?;
+    let _lock = lock_install_target(full_name).await;
+    if !step.is_root
+        && let Some(row) = installed_at_least(db, full_name, &step.version)?
+    {
+        // Another install updated this dependency while this one waited
+        return Ok(Some((full_name.to_string(), row)));
+    }
     let url = step.download_url.as_str();
     let install = with_install_retries(|| async move {
         bmm_lib::installer::install_thunderstore_package(url, namespace, name)
@@ -1948,6 +2028,51 @@ mod tests {
         let index = rows.iter().find(|r| r.source == SOURCE_INDEX).unwrap();
         assert_eq!(index.name, "Foo");
         assert_eq!(index.path, index_dir.to_string_lossy());
+    }
+
+    #[test]
+    fn installs_of_one_target_wait_for_each_other() {
+        tauri::async_runtime::block_on(async {
+            let first = lock_install_target("Ns-Lib").await;
+            let waiting = tokio::spawn(async {
+                let _lock = lock_install_target("ns-lib").await;
+            });
+            // Another target is not blocked
+            drop(lock_install_target("Ns-Other").await);
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            assert!(!waiting.is_finished());
+            drop(first);
+            waiting.await.unwrap();
+        });
+    }
+
+    #[test]
+    fn a_dependency_updated_meanwhile_is_not_installed_again() {
+        let td = tempfile::tempdir().unwrap();
+        let lib = td.path().join("Mods/Ns-Lib");
+        make_mod(&lib);
+        let db = temp_db(td.path());
+        db.lock()
+            .unwrap()
+            .add_installed_mod_with_source(
+                "Lib",
+                &lib.to_string_lossy(),
+                &[],
+                Some("2.0.0".into()),
+                SOURCE_THUNDERSTORE,
+                Some("Ns-Lib"),
+            )
+            .unwrap();
+        assert_eq!(
+            installed_at_least(&db, "Ns-Lib", "2.0.0")
+                .unwrap()
+                .as_deref(),
+            Some("Lib")
+        );
+        assert_eq!(installed_at_least(&db, "Ns-Lib", "2.1.0").unwrap(), None);
+        assert_eq!(installed_at_least(&db, "Ns-Other", "1.0.0").unwrap(), None);
+        std::fs::remove_dir_all(&lib).unwrap();
+        assert_eq!(installed_at_least(&db, "Ns-Lib", "1.0.0").unwrap(), None);
     }
 
     #[test]
