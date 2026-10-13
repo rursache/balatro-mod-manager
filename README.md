@@ -1,8 +1,6 @@
 # [![Balatro Mod Manager](images/title.svg)](#)
 
-Balatro Mod Manager is a standalone tool made for [Balatro](https://store.steampowered.com/app/2379780/Balatro/) that makes finding, downloading, and installing mods easy
-
-Maintained by [Radu Ursache](https://radu.ursache.ro) ([@rursache](https://github.com/rursache)). Originally created by Efe "Skyline" ([@skyline69](https://github.com/skyline69))
+Balatro Mod Manager is a standalone tool for [Balatro](https://store.steampowered.com/app/2379780/Balatro/) that makes finding, downloading and installing mods easy
 
 ![GitHub Downloads (all assets, all releases)](https://img.shields.io/github/downloads/rursache/balatro-mod-manager/total)
 ![GitHub License](https://img.shields.io/github/license/rursache/balatro-mod-manager)
@@ -17,13 +15,13 @@ Maintained by [Radu Ursache](https://radu.ursache.ro) ([@rursache](https://githu
 
 ## About this fork
 
-The original Balatro Mod Manager by Efe "Skyline" was discontinued and its servers were shut down. Radu Ursache picked it up and keeps it going in this fork
+The original Balatro Mod Manager by Efe "Skyline" was discontinued and its servers were shut down. I liked it too much to let it go, so I picked it up and keep it going here
 
-- The mod catalog now comes straight from [kasimeka/balatro-mod-index](https://github.com/kasimeka/balatro-mod-index), so it no longer depends on the old servers
-- Thunderstore support is coming
-- Releases, issues and updates live in [rursache/balatro-mod-manager](https://github.com/rursache/balatro-mod-manager)
+- Mods come from the community [balatro-mod-index](https://github.com/kasimeka/balatro-mod-index) and from [Thunderstore](https://thunderstore.io/c/balatro/), merged into one catalog, so nothing depends on the old servers anymore
+- Multiplayer has its own tab and installs the official packages from Thunderstore (casual play, ranked still needs the official BET launcher)
+- Releases, issues and updates live in this repository
 
-Mods are listed by submitting them to the [index repository](https://github.com/kasimeka/balatro-mod-index), see [CONTRIBUTING.md](CONTRIBUTING.md)
+Mods are listed by submitting them to the [index repository](https://github.com/kasimeka/balatro-mod-index) or by publishing them on Thunderstore, see [CONTRIBUTING.md](CONTRIBUTING.md)
 
 <p align="center">
     <a href="https://star-history.com/#rursache/balatro-mod-manager&Date">
@@ -37,163 +35,100 @@ Mods are listed by submitting them to the [index repository](https://github.com/
 
 # [![Download](images/download.svg)](https://github.com/rursache/balatro-mod-manager/releases/latest)
 
-Balatro Mod Manager is available for Windows, macOS, and Linux. The installer is standalone and does not require any external libraries.
+Balatro Mod Manager runs on Windows, macOS and Linux and needs no extra libraries
 
-> Note: The Balatro Mod Manager is **NOT** compatible with the Xbox Gamepass version of Balatro
+> Note: Balatro Mod Manager is **NOT** compatible with the Xbox Game Pass version of Balatro
 
-[Download the Balatro Mod Manager installer here](https://github.com/rursache/balatro-mod-manager/releases/latest).
-
-Scroll down to find **▸Assets** and download the right version of the installer for your system.
+Grab the installer for your system from the **Assets** section of the [latest release](https://github.com/rursache/balatro-mod-manager/releases/latest)
 
 - Windows: `Balatro-Mod-Manager-<version>-windows-x64-setup.exe` or `Balatro-Mod-Manager-<version>-windows-x64.msi`
 - macOS: `Balatro-Mod-Manager-<version>-macos-arm64.dmg` (or the `.zip` with the app inside), or Homebrew
-- Linux: Flatpak (`Balatro-Mod-Manager-<version>-linux.flatpak`), AUR, `Balatro-Mod-Manager-<version>-linux-amd64.AppImage`, `-linux-amd64.deb` or `-linux-x86_64.rpm`
+- Linux: `Balatro-Mod-Manager-<version>-linux.flatpak`, `-linux-amd64.AppImage`, `-linux-amd64.deb` or `-linux-x86_64.rpm`
 
-Every release also ships `checksums.txt` with the SHA-256 of each asset
+Every release also ships `checksums.txt` with the SHA-256 of each file
 
-### Installing on macOS
+### macOS
 
-The macOS build is for Apple Silicon (Intel Macs are not supported), signed with a Developer ID and notarized by Apple, so it opens without any Gatekeeper workaround
+The macOS build is for Apple Silicon, signed with a Developer ID and notarized by Apple, so it opens without any Gatekeeper workaround
 
 - Homebrew:
   ```bash
   brew install --cask rursache/tap/balatro-mod-manager
   ```
-- Or mount the `.dmg` and drag **Balatro Mod Manager** into `/Applications`
-
-Releases before the notarized builds were only ad hoc signed. If macOS refuses to open one of those, run `xattr -dr com.apple.quarantine "/Applications/Balatro Mod Manager.app"` once
-
-### Arch Linux (AUR)
-
-Install using your preferred AUR helper:
-
-```bash
-yay -S balatro-mod-manager-bin
-# or
-paru -S balatro-mod-manager-bin
-```
+- Or open the `.dmg` and drag **Balatro Mod Manager** into `/Applications`
 
 ### Debian / Ubuntu
 
-Download the `.deb` from the [latest release](https://github.com/rursache/balatro-mod-manager/releases/latest) and install:
+Download the `.deb` from the [latest release](https://github.com/rursache/balatro-mod-manager/releases/latest) and install it:
 
 ```bash
 sudo apt install ./Balatro-Mod-Manager-*-linux-amd64.deb
 ```
 
-## Flatpak (Steam Deck/Linux)
+### Flatpak (Steam Deck / Linux)
 
-> You need [flatpak-builder](https://docs.flatpak.org/en/latest/flatpak-builder.html) for this.
-
-- Run from a local checkout:
-  ```bash
-  git clone https://github.com/rursache/balatro-mod-manager.git
-  cd balatro-mod-manager
-  ```
-- Install runtimes once (GNOME 50 + toolchain extensions):
-  ```bash
-  flatpak install org.gnome.Platform//50 org.gnome.Sdk//50 \
-    org.freedesktop.Sdk.Extension.node20//25.08 \
-    org.freedesktop.Sdk.Extension.rust-stable//25.08
-  ```
-- Build + bundle from this repo:
-  ```bash
-  flatpak-builder --force-clean --repo=repo build-dir packaging/flatpak/io.balatro.ModManager.json
-  flatpak build-bundle repo balatro-mod-manager.flatpak io.balatro.ModManager master
-  ```
-- Install/run (on the Deck or any Flatpak host):
-  ```bash
-  flatpak install --user balatro-mod-manager.flatpak
-  flatpak run io.balatro.ModManager
-  ```
-
-# [![Build](images/build.svg)](#build-prerequisites)
-
-Alternatively, if you would prefer to build Balatro Mod Manager yourself instead of downloading the [prebuilt installer](https://github.com/rursache/balatro-mod-manager/releases/latest), Balatro Mod Manager can be compiled from source using the instructions below.
-
-## Build Prerequisites
-
-- [Rust via rustup](https://rustup.rs/) (for the backend)
-- [Bun](https://bun.sh/) (for the frontend, also provides the Tauri CLI through `bun tauri`)
-- [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/) for your OS
-- [Task](https://taskfile.dev/) (for running task commands)
-  - **Arch Linux**: `sudo pacman -S go-task` (package is named `go-task` to avoid conflicts)
-  - **Fedora**: `sudo dnf install go-task`
-  - **Ubuntu/Debian**: Install via the [official script](https://taskfile.dev/installation/#install-script) or Snap: `sudo snap install task --classic`
-  - **macOS**: `brew install go-task`
-  - **Windows**: `choco install go-task` or `winget install Task.Task`
-
-## Automatic Installation
-
-### For Windows
-
-open Powershell & run this command:
-
-```powershell
-iwr https://raw.githubusercontent.com/rursache/balatro-mod-manager/main/scripts/install.ps1 -useb | iex
-```
-
-### For macOS
-
-run this command:
+Download the `.flatpak` from the [latest release](https://github.com/rursache/balatro-mod-manager/releases/latest), then:
 
 ```bash
-curl -sL https://raw.githubusercontent.com/rursache/balatro-mod-manager/main/scripts/install.sh | bash
+flatpak install --user Balatro-Mod-Manager-*-linux.flatpak
+flatpak run io.balatro.ModManager
 ```
 
-### For Linux (Flatpak)
-
-From a local checkout (respects your current branch/changes):
-
-```bash
-./scripts/linux-install.sh
-```
-
-If you want to install from the latest GitHub main without cloning manually, pass `--clone`:
+Or let the install script fetch the latest release Flatpak (it builds locally if none is available):
 
 ```bash
 curl -sL https://raw.githubusercontent.com/rursache/balatro-mod-manager/main/scripts/linux-install.sh | bash -s -- --clone
 ```
 
-The script now prefers the latest GitHub Release Flatpak if available, and falls back to a local build if not.
+On Linux the manager currently supports the Steam version of Balatro only
 
-Launch after install:
+# [![Build](images/build.svg)](#build-prerequisites)
 
-```bash
-flatpak run io.balatro.ModManager
-```
+If you prefer building it yourself instead of using the [prebuilt installers](https://github.com/rursache/balatro-mod-manager/releases/latest), here is how
 
-Linux builds use Flatpak, so you’ll need `flatpak` and `flatpak-builder` installed.
-On Linux the manager currently supports the Steam version of Balatro only.
+## Build Prerequisites
 
-## Manual Installation
+- [Rust via rustup](https://rustup.rs/) for the backend
+- [Bun](https://bun.sh/) for the frontend, it also provides the Tauri CLI through `bun tauri`
+- [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/) for your OS
+- [Task](https://taskfile.dev/) for the task commands
+  - **Arch Linux**: `sudo pacman -S go-task` (named `go-task` to avoid conflicts)
+  - **Fedora**: `sudo dnf install go-task`
+  - **Ubuntu/Debian**: the [official script](https://taskfile.dev/installation/#install-script) or `sudo snap install task --classic`
+  - **macOS**: `brew install go-task`
+  - **Windows**: `choco install go-task` or `winget install Task.Task`
 
-1. Clone the repository & install bun's dependencies:
+## Building from source
+
+1. Clone the repository and install the frontend dependencies:
    ```sh
    git clone https://github.com/rursache/balatro-mod-manager.git
    cd balatro-mod-manager && bun install
    ```
-2. Build for your platform (see [Building Releases](#building-releases))
+2. Build for your platform (see [Building Releases](#building-releases)):
    ```sh
    task build:macos   # or build:windows, build:linux
    ```
+
+The install scripts do the same in one go:
+
+- Windows (PowerShell): `iwr https://raw.githubusercontent.com/rursache/balatro-mod-manager/main/scripts/install.ps1 -useb | iex`
+- macOS: `curl -sL https://raw.githubusercontent.com/rursache/balatro-mod-manager/main/scripts/install.sh | bash`
+- Linux (Flatpak, from a checkout): `./scripts/linux-install.sh`
 
 ## Running the Project
 
 ### Development Mode
 
-To start the project in development mode, use the provided taskfile:
+```sh
+task debug
+```
 
-1. Run the debug target:
-   ```sh
-   task debug
-   ```
-
-> Linux/Wayland: on Wayland sessions the app now prefers X11 (XWayland) to avoid compositor protocol errors. Set `BMM_ALLOW_WAYLAND=1` before running if you want to keep native Wayland.
+> Linux/Wayland: on Wayland sessions the app prefers X11 (XWayland) to avoid compositor protocol errors. Set `BMM_ALLOW_WAYLAND=1` before running to keep native Wayland
 
 ### Building Releases
 
-Every platform has one script in `scripts/` that writes its artifacts to `dist/<platform>/`. The Taskfile wraps them, and CI is meant to call the same scripts
+Every platform has one script in `scripts/` that writes its artifacts to `dist/<platform>/`. The Taskfile wraps them and the release workflow calls the same scripts
 
 | Task | Script | Output | Host requirements |
 |---|---|---|---|
@@ -202,7 +137,7 @@ Every platform has one script in `scripts/` that writes its artifacts to `dist/<
 | `task build:linux` | `scripts/build-linux.sh` | `.deb`, `.AppImage`, `.rpm` | Docker (OrbStack or Docker Desktop on macOS), the image comes from `packaging/Dockerfile` |
 | `task build:all` | all of the above | everything | macOS with all of the above |
 
-Builds are ad hoc signed on macOS and unsigned on Windows. Set `APPLE_SIGNING_IDENTITY` (and `APPLE_ID`, `APPLE_PASSWORD`, `APPLE_TEAM_ID` to notarize) before `build:macos` to sign with a real identity. `SKIP_FRONTEND=1` reuses an existing `build/` folder. `BUNDLES=app scripts/build-macos.sh` only builds the `.app` into `dist/macos`
+Local builds are ad hoc signed on macOS and unsigned on Windows. Set `APPLE_SIGNING_IDENTITY` (and `APPLE_ID`, `APPLE_PASSWORD`, `APPLE_TEAM_ID` to notarize) before `build:macos` to sign with a real identity. `SKIP_FRONTEND=1` reuses an existing `build/` folder and `BUNDLES=app scripts/build-macos.sh` only builds the `.app` into `dist/macos`
 
 The version shown in the app comes from git: the tag on `HEAD` (without the leading `v`), otherwise the short commit hash, otherwise `dev`. `BMM_VERSION=1.2.3` overrides it. Only tagged builds check GitHub for app updates
 
@@ -210,23 +145,20 @@ The version shown in the app comes from git: the tag on `HEAD` (without the lead
 
 ### Publishing a release
 
-Publishing a GitHub release runs `.github/workflows/release.yml`, which builds every platform with the scripts above, signs and notarizes the macOS app, uploads the assets and `checksums.txt` to the release and updates the Homebrew cask (stable releases only). Running the workflow by hand with a tag and `dry_run` builds, signs and notarizes without touching the release, the assets stay attached to the workflow run. MSI installers are skipped for tags WiX cannot encode (anything other than `x.y.z` or `x.y.z-N`)
+Publishing a GitHub release runs `.github/workflows/release.yml`, which builds every platform with the scripts above, signs and notarizes the macOS app, uploads the assets and `checksums.txt` to the release and updates the Homebrew cask (stable releases only). Running the workflow by hand with a tag and `dry_run` builds, signs and notarizes without touching the release, the files stay attached to the workflow run. MSI installers are skipped for tags WiX cannot encode (anything other than `x.y.z` or `x.y.z-N`)
 
 Cross compiling to Windows relies on a patched copy of `unrar_sys` in `src-tauri/vendor/unrar_sys` (see `PATCHED.md` there)
 
 ## Cleaning the Build
 
-To clean the build files, use the provided taskfile:
-
-1. Run the clean target:
-   ```sh
-   task clean
-   ```
+```sh
+task clean
+```
 
 ## Credits
 
-- Efe "Skyline" ([@skyline69](https://github.com/skyline69)) created Balatro Mod Manager and maintained it until it was discontinued. This fork builds on his work
-- The mod catalog is the community run [balatro-mod-index](https://github.com/kasimeka/balatro-mod-index)
+- Efe "Skyline" ([@skyline69](https://github.com/skyline69)) created Balatro Mod Manager and maintained it until it was discontinued, this fork builds on his work
+- The community run [balatro-mod-index](https://github.com/kasimeka/balatro-mod-index) and [Thunderstore](https://thunderstore.io/c/balatro/) provide the mod catalog
 - Font by Daniel Linssen
 
 ## License
