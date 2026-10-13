@@ -1070,7 +1070,7 @@ pub async fn install_mod(
     let mut last_error: Option<String> = None;
     let mut delay = Duration::from_millis(500);
 
-    let resolved_url = crate::mod_index::resolve_install_url(&url).await?;
+    let resolved_url = crate::catalog::resolve_install_url(&url).await?;
 
     for attempt in 1..=INSTALL_MAX_RETRIES {
         // Attempt to install the mod

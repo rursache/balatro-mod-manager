@@ -59,6 +59,22 @@ static SYNC: Lazy<tokio::sync::Mutex<()>> = Lazy::new(|| tokio::sync::Mutex::new
 // Bumped by reset_cache so a sync that started before the reset does not write back
 static CACHE_GENERATION: AtomicU64 = AtomicU64::new(0);
 static LAST_FAILED_SYNC: AtomicU64 = AtomicU64::new(0);
+static LAST_ERROR: Lazy<std::sync::Mutex<Option<String>>> =
+    Lazy::new(|| std::sync::Mutex::new(None));
+
+fn set_last_error(error: Option<String>) {
+    *LAST_ERROR.lock().unwrap_or_else(|e| e.into_inner()) = error;
+}
+
+/// Error of the most recent failed sync, cleared by the next successful one
+pub fn last_sync_error() -> Option<String> {
+    LAST_ERROR.lock().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
+/// When the in-memory catalog last synced with GitHub, 0 when nothing is loaded
+pub async fn synced_at() -> u64 {
+    INDEX.lock().await.as_ref().map_or(0, |c| c.synced_at)
+}
 
 #[derive(Debug, Deserialize)]
 pub struct TreeResp {
@@ -383,6 +399,7 @@ pub fn meta_to_item(
             .map(|p| raw_url(commit_sha, p))
             .unwrap_or_default(),
         has_thumbnail: thumb_path.is_some(),
+        ..Default::default()
     }
 }
 
@@ -818,8 +835,10 @@ async fn refresh(
     let (entries, all_ok) =
         build_entries(&cache.entries, &groups, &fetched, &head, initial_sync, now);
 
+    // Thumbnails used to be keyed by title and are now keyed by catalog id, drop both
     let mut stale_titles: Vec<String> = Vec::new();
     for dir in &plan.thumbs_changed {
+        stale_titles.push(dir.clone());
         for entry in [cache.entries.get(dir), entries.get(dir)]
             .into_iter()
             .flatten()
@@ -901,6 +920,7 @@ pub async fn sync_index(force: bool) -> Result<Vec<ArchiveModItem>, String> {
     match result {
         Ok(stale) => {
             LAST_FAILED_SYNC.store(0, Ordering::Relaxed);
+            set_last_error(None);
             if !current {
                 return Ok(working.sorted_items());
             }
@@ -916,11 +936,13 @@ pub async fn sync_index(force: bool) -> Result<Vec<ArchiveModItem>, String> {
         }
         Err(e) if !working.entries.is_empty() => {
             LAST_FAILED_SYNC.store(now, Ordering::Relaxed);
+            set_last_error(Some(e.clone()));
             log::warn!("Mod index: sync failed, serving cached catalog: {e}");
             Ok(working.sorted_items())
         }
         Err(e) => {
             LAST_FAILED_SYNC.store(now, Ordering::Relaxed);
+            set_last_error(Some(e.clone()));
             Err(format!("Could not load the mod index from GitHub: {e}"))
         }
     }
@@ -931,6 +953,7 @@ pub async fn reset_cache() {
     let mut guard = INDEX.lock().await;
     CACHE_GENERATION.fetch_add(1, Ordering::Relaxed);
     LAST_FAILED_SYNC.store(0, Ordering::Relaxed);
+    set_last_error(None);
     *guard = None;
 }
 
@@ -944,25 +967,6 @@ pub async fn catalog_items() -> Result<Vec<ArchiveModItem>, String> {
         }
     }
     sync_index(false).await
-}
-
-/// Looks up a catalog item by index dir name, then title, then fuzzy id
-pub async fn find_item(key: &str) -> Option<ArchiveModItem> {
-    let key = key.trim();
-    if key.is_empty() {
-        return None;
-    }
-    let items = catalog_items().await.ok()?;
-    items
-        .iter()
-        .find(|i| i.dir_name == key)
-        .or_else(|| {
-            items
-                .iter()
-                .find(|i| i.meta.title.eq_ignore_ascii_case(key))
-        })
-        .or_else(|| resolve_index_id(key, &items))
-        .cloned()
 }
 
 fn download_url_of(item: &ArchiveModItem) -> Result<String, String> {
@@ -1022,6 +1026,7 @@ mod tests {
             description: String::new(),
             image_url: String::new(),
             has_thumbnail: false,
+            ..Default::default()
         }
     }
 

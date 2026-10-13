@@ -1,4 +1,5 @@
 mod assets;
+mod catalog;
 pub mod commands;
 mod compat_helper;
 mod links;
@@ -6,6 +7,7 @@ mod mod_index;
 mod models;
 mod state;
 mod thumb_queue;
+mod thunderstore;
 mod util;
 #[cfg(target_os = "linux")]
 pub mod wayland_session;
@@ -479,6 +481,7 @@ pub fn run() {
             commands::cache::get_last_fetched,
             commands::cache::update_last_fetched,
             commands::repo::fetch_repo_mods,
+            commands::repo::catalog_status,
             commands::repo::get_cached_thumbnail_by_title,
             commands::repo::get_cached_thumbnails_map,
             commands::repo::get_description_cached_or_remote,
