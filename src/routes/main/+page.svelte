@@ -5,7 +5,6 @@
   import About from "../../components/viewblock/About.svelte";
   import LaunchButton from "../../components/LaunchButton.svelte";
   import Mods from "../../components/viewblock/Mods.svelte";
-  import SubmitMod from "../../components/viewblock/SubmitMod.svelte";
   import Settings from "../../components/viewblock/Settings.svelte";
   import RequiresPopup from "../../components/RequiresPopup.svelte";
   import SecurityPopup from "../../components/SecurityPopup.svelte";
@@ -344,12 +343,6 @@
         Backups
       </button>
       <button
-        class:active={currentSection === "submit"}
-        onclick={() => (currentSection = "submit")}
-      >
-        Submit Mod
-      </button>
-      <button
         class:active={currentSection === "settings"}
         onclick={() => (currentSection = "settings")}
       >
@@ -377,10 +370,6 @@
 
     <div class="section-wrapper" class:active={currentSection === "backups"}>
       <BackupsPanel />
-    </div>
-
-    <div class="section-wrapper" class:active={currentSection === "submit"}>
-      <SubmitMod />
     </div>
 
     <div class="section-wrapper" class:active={currentSection === "settings"}>
