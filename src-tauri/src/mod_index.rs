@@ -7,6 +7,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use futures::{StreamExt, stream};
@@ -22,6 +23,7 @@ pub const INDEX_NAME: &str = "balatro-mod-index";
 pub const INDEX_BRANCH: &str = "main";
 
 const INDEX_MIN_REFRESH_SECS: u64 = 300;
+const INDEX_FAILED_RETRY_SECS: u64 = 60;
 const FETCH_CONCURRENCY: usize = 16;
 const CACHE_SCHEMA: u32 = 1;
 const CACHE_FILE: &str = "github_index_v1.json";
@@ -52,6 +54,11 @@ pub fn http_client() -> &'static reqwest::Client {
 
 static INDEX: Lazy<tokio::sync::Mutex<Option<IndexCache>>> =
     Lazy::new(|| tokio::sync::Mutex::new(None));
+// Serializes syncs so INDEX is only locked briefly and lookups never wait on the network
+static SYNC: Lazy<tokio::sync::Mutex<()>> = Lazy::new(|| tokio::sync::Mutex::new(()));
+// Bumped by reset_cache so a sync that started before the reset does not write back
+static CACHE_GENERATION: AtomicU64 = AtomicU64::new(0);
+static LAST_FAILED_SYNC: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Deserialize)]
 pub struct TreeResp {
@@ -855,60 +862,83 @@ fn remove_cached_thumbnails(titles: &[String]) {
     }
 }
 
-/// Returns the catalog, syncing with GitHub when the cache is older than a few minutes
-/// (or always when `force` is set). Falls back to the cached catalog when offline
-pub async fn sync_index(force: bool) -> Result<Vec<ArchiveModItem>, String> {
-    let mut guard = INDEX.lock().await;
-    let cache_path = cache_dir().map(|d| d.join(CACHE_FILE));
-    let cache = guard.get_or_insert_with(|| {
-        cache_path
+fn load_or_empty(guard: &mut Option<IndexCache>) -> &mut IndexCache {
+    guard.get_or_insert_with(|| {
+        cache_dir()
+            .map(|d| d.join(CACHE_FILE))
             .as_deref()
             .and_then(load_cache_from)
             .unwrap_or_else(IndexCache::empty)
-    });
+    })
+}
+
+/// Whether a non-forced sync may skip the network and serve the cached catalog
+fn cache_is_fresh(cache: &IndexCache, last_failed: u64, now: u64) -> bool {
+    !cache.entries.is_empty()
+        && (now.saturating_sub(cache.synced_at) < INDEX_MIN_REFRESH_SECS
+            || now.saturating_sub(last_failed) < INDEX_FAILED_RETRY_SECS)
+}
+
+/// Returns the catalog, syncing with GitHub when the cache is older than a few minutes
+/// (or always when `force` is set). Falls back to the cached catalog when offline
+pub async fn sync_index(force: bool) -> Result<Vec<ArchiveModItem>, String> {
+    let _sync = SYNC.lock().await;
 
     let now = now_secs();
-    if !force
-        && !cache.entries.is_empty()
-        && now.saturating_sub(cache.synced_at) < INDEX_MIN_REFRESH_SECS
-    {
-        return Ok(cache.sorted_items());
-    }
+    let (mut working, generation) = {
+        let mut guard = INDEX.lock().await;
+        let cache = load_or_empty(&mut guard);
+        if !force && cache_is_fresh(cache, LAST_FAILED_SYNC.load(Ordering::Relaxed), now) {
+            return Ok(cache.sorted_items());
+        }
+        (cache.clone(), CACHE_GENERATION.load(Ordering::Relaxed))
+    };
 
-    match refresh(cache, http_client(), now).await {
+    let result = refresh(&mut working, http_client(), now).await;
+
+    let mut guard = INDEX.lock().await;
+    let current = CACHE_GENERATION.load(Ordering::Relaxed) == generation;
+    match result {
         Ok(stale) => {
+            LAST_FAILED_SYNC.store(0, Ordering::Relaxed);
+            if !current {
+                return Ok(working.sorted_items());
+            }
             remove_cached_thumbnails(&stale);
-            if let Some(path) = &cache_path
-                && let Err(e) = save_cache_to(path, cache)
+            if let Some(path) = cache_dir().map(|d| d.join(CACHE_FILE))
+                && let Err(e) = save_cache_to(&path, &working)
             {
                 log::warn!("Mod index: failed to persist cache: {e}");
             }
-            Ok(cache.sorted_items())
+            let items = working.sorted_items();
+            *guard = Some(working);
+            Ok(items)
         }
-        Err(e) if !cache.entries.is_empty() => {
+        Err(e) if !working.entries.is_empty() => {
+            LAST_FAILED_SYNC.store(now, Ordering::Relaxed);
             log::warn!("Mod index: sync failed, serving cached catalog: {e}");
-            Ok(cache.sorted_items())
+            Ok(working.sorted_items())
         }
-        Err(e) => Err(format!("Could not load the mod index from GitHub: {e}")),
+        Err(e) => {
+            LAST_FAILED_SYNC.store(now, Ordering::Relaxed);
+            Err(format!("Could not load the mod index from GitHub: {e}"))
+        }
     }
 }
 
 /// Forgets the in-memory catalog so the next request reloads it from disk or GitHub
 pub async fn reset_cache() {
-    *INDEX.lock().await = None;
+    let mut guard = INDEX.lock().await;
+    CACHE_GENERATION.fetch_add(1, Ordering::Relaxed);
+    LAST_FAILED_SYNC.store(0, Ordering::Relaxed);
+    *guard = None;
 }
 
 /// The catalog as currently known, syncing only when nothing is cached yet
 pub async fn catalog_items() -> Result<Vec<ArchiveModItem>, String> {
     {
         let mut guard = INDEX.lock().await;
-        let cache = guard.get_or_insert_with(|| {
-            cache_dir()
-                .map(|d| d.join(CACHE_FILE))
-                .as_deref()
-                .and_then(load_cache_from)
-                .unwrap_or_else(IndexCache::empty)
-        });
+        let cache = load_or_empty(&mut guard);
         if !cache.entries.is_empty() {
             return Ok(cache.sorted_items());
         }
@@ -1431,6 +1461,27 @@ mod tests {
         sort_items(&mut items);
         let dirs: Vec<&str> = items.iter().map(|i| i.dir_name.as_str()).collect();
         assert_eq!(dirs, vec!["a@a", "b@a", "z@b"]);
+    }
+
+    #[test]
+    fn cache_is_fresh_backs_off_after_a_failed_sync() {
+        let mut cache = IndexCache::empty();
+        let now = 10_000;
+        cache.synced_at = now - INDEX_MIN_REFRESH_SECS - 1;
+        assert!(!cache_is_fresh(&cache, 0, now));
+
+        cache
+            .entries
+            .insert("a@b".into(), entry("m", None, None, item("a@b", "B", "")));
+        assert!(!cache_is_fresh(&cache, 0, now));
+        assert!(cache_is_fresh(&cache, now - 5, now));
+        assert!(!cache_is_fresh(&cache, now - INDEX_FAILED_RETRY_SECS, now));
+
+        cache.synced_at = now - 1;
+        assert!(cache_is_fresh(&cache, 0, now));
+
+        cache.entries.clear();
+        assert!(!cache_is_fresh(&cache, now - 5, now));
     }
 
     #[test]
