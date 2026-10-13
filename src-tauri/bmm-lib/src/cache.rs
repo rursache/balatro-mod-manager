@@ -512,10 +512,11 @@ mod tests {
     )]
     fn test_versions_cache_roundtrip() -> Result<(), AppError> {
         with_temp_cache(|_| {
-            let versions = vec!["1.0.0".into(), "1.1.0".into()];
+            let versions: Vec<String> = vec!["26.829.0".into(), "26.1002.0".into()];
             save_versions_cache("steamodded", &versions)?;
             let loaded = load_versions_cache("steamodded")?.expect("versions cache present");
-            assert_eq!(loaded, versions);
+            // Loading re-sorts newest first by numeric tag order
+            assert_eq!(loaded, vec!["26.1002.0".to_string(), "26.829.0".to_string()]);
             Ok(())
         })
     }

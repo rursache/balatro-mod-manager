@@ -1261,7 +1261,8 @@ pub fn readiness(inputs: &ReadinessInputs<'_>) -> Vec<ReadinessCheck> {
 // ---------------------------------------------------------------------------
 
 /// How the game process is started, which decides how the API finds its DLLs
-#[cfg_attr(not(any(target_os = "windows", target_os = "linux")), allow(dead_code))]
+// Each platform only constructs its own variants outside of tests
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LaunchKind {
     /// The mod loads its dylibs from its own folder by absolute path, nothing to pass
