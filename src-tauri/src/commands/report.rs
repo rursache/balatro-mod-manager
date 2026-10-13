@@ -1,110 +1,77 @@
-use base64::{Engine as _, engine::general_purpose::STANDARD};
-use serde::Serialize;
 use std::fs;
-use std::time::Duration;
 use sysinfo::System;
 
-const REPORT_URL: &str = "https://balatro-mod-manager-reports.dasguney.com/report";
-const REPORT_TIMEOUT: Duration = Duration::from_secs(30);
-const REPORT_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+use crate::links::APP_REPO_URL;
 
-#[derive(Serialize)]
-struct ReportPayload<'a> {
-    title: &'a str,
-    description: &'a str,
-    mm_version: &'a str,
+const ISSUE_DESCRIPTION_MAX_CHARS: usize = 1200;
+const ISSUE_URL_MAX_LEN: usize = 7000;
+
+struct SystemSummary {
     os: String,
     arch: String,
     cpu: String,
     gpu: String,
     ram: String,
-    log_b64: String,
-    log_filename: String,
 }
 
-/// Submit an issue report to the Jimbo bot server.
+fn collect_system_summary() -> SystemSummary {
+    let (cpu, ram) = get_cpu_and_ram();
+    let os = std::env::consts::OS.to_string();
+    let os = match detect_os_version() {
+        Some(v) => format!("{os} | {v}"),
+        None => os,
+    };
+    SystemSummary {
+        os,
+        arch: std::env::consts::ARCH.to_string(),
+        cpu,
+        gpu: detect_gpu().unwrap_or_else(|| "Unknown".to_string()),
+        ram,
+    }
+}
+
+fn truncate_chars(s: &str, max: usize) -> String {
+    match s.char_indices().nth(max) {
+        Some((idx, _)) => format!("{}...", &s[..idx]),
+        None => s.to_string(),
+    }
+}
+
+/// Prefilled GitHub issue form URL, kept under a length GitHub accepts
+fn issue_url(title: &str, description: &str, mm_version: &str, sys: &SystemSummary) -> String {
+    let build = |desc: &str| {
+        let info = format!(
+            "{desc}\n\n### System\n- OS: {}\n- Arch: {}\n- CPU: {}\n- GPU: {}\n- RAM: {}\n\nPlease attach the log file (it was copied to your clipboard)",
+            sys.os, sys.arch, sys.cpu, sys.gpu, sys.ram
+        );
+        format!(
+            "{APP_REPO_URL}/issues/new?template=bug_report.yml&title={}&version={}&additional-info={}",
+            urlencoding::encode(title.trim()),
+            urlencoding::encode(mm_version.trim()),
+            urlencoding::encode(&info)
+        )
+    };
+    let mut max = ISSUE_DESCRIPTION_MAX_CHARS;
+    loop {
+        let url = build(&truncate_chars(description.trim(), max));
+        if url.len() <= ISSUE_URL_MAX_LEN || max == 0 {
+            return url;
+        }
+        max /= 2;
+    }
+}
+
+/// Builds the GitHub issue URL the frontend opens for bug reports
 #[tauri::command]
-pub async fn submit_report(
+pub async fn build_issue_report_url(
     title: String,
     description: String,
     mm_version: String,
-) -> Result<(), String> {
-    // Collect system info
-    let (cpu, ram_str) = get_cpu_and_ram();
-    let os = std::env::consts::OS.to_string();
-    let os_version = detect_os_version().unwrap_or_else(|| "Unknown".to_string());
-    let os_combined = if os_version == "Unknown" {
-        os.clone()
-    } else {
-        format!("{} | {}", os, os_version)
-    };
-    let arch = std::env::consts::ARCH.to_string();
-    let gpu = detect_gpu().unwrap_or_else(|| "Unknown".to_string());
-
-    // Get latest log
-    let (log_filename, log_text) =
-        latest_log().unwrap_or_else(|| ("bmm.log".to_string(), String::from("No logs found.")));
-    let log_b64 = STANDARD.encode(log_text.as_bytes());
-
-    let payload = ReportPayload {
-        title: &title,
-        description: &description,
-        mm_version: &mm_version,
-        os: os_combined,
-        arch,
-        cpu,
-        gpu,
-        ram: ram_str,
-        log_b64,
-        log_filename,
-    };
-
-    // Send with timeout to avoid hanging indefinitely
-    let client = reqwest::Client::builder()
-        .timeout(REPORT_TIMEOUT)
-        .connect_timeout(REPORT_CONNECT_TIMEOUT)
-        .build()
-        .map_err(|e| {
-            log::error!("Failed to build HTTP client for report: {}", e);
-            format!("Failed to initialize report client: {e}")
-        })?;
-
-    log::info!("Submitting issue report: {}", title);
-    let resp = client
-        .post(REPORT_URL)
-        .json(&payload)
-        .send()
+) -> Result<String, String> {
+    let sys = tauri::async_runtime::spawn_blocking(collect_system_summary)
         .await
-        .map_err(|e| {
-            log::error!("Report request failed: {}", e);
-            if e.is_timeout() {
-                "Report request timed out. Please check your internet connection and try again."
-                    .to_string()
-            } else if e.is_connect() {
-                "Could not connect to report server. Please check your internet connection."
-                    .to_string()
-            } else {
-                format!("Report request failed: {e}")
-            }
-        })?;
-
-    if !resp.status().is_success() {
-        let status = resp.status();
-        let text = resp.text().await.unwrap_or_default();
-        let err_msg = format!(
-            "Report server error: HTTP {}{}",
-            status,
-            if text.is_empty() {
-                String::new()
-            } else {
-                format!(" - {}", text)
-            }
-        );
-        log::error!("{}", err_msg);
-        return Err(err_msg);
-    }
-    log::info!("Issue report submitted successfully");
-    Ok(())
+        .map_err(|e| e.to_string())?;
+    Ok(issue_url(&title, &description, &mm_version, &sys))
 }
 
 /// Returns the latest log's filename and text, if any.
@@ -446,78 +413,33 @@ fn detect_cpu() -> String {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_report_url_is_https() {
-        assert!(REPORT_URL.starts_with("https://"));
-    }
-
-    #[test]
-    fn test_report_timeout_is_reasonable() {
-        assert!(REPORT_TIMEOUT.as_secs() >= 10);
-        assert!(REPORT_TIMEOUT.as_secs() <= 120);
-    }
-
-    #[test]
-    fn test_report_connect_timeout_is_reasonable() {
-        assert!(REPORT_CONNECT_TIMEOUT.as_secs() >= 5);
-        assert!(REPORT_CONNECT_TIMEOUT.as_secs() <= 30);
-    }
-
-    #[test]
-    fn test_report_connect_timeout_less_than_total() {
-        assert!(REPORT_CONNECT_TIMEOUT < REPORT_TIMEOUT);
-    }
-
-    #[test]
-    fn test_report_payload_serialize() {
-        let payload = ReportPayload {
-            title: "Test Bug",
-            description: "A test description",
-            mm_version: "1.0.0",
-            os: "linux".to_string(),
-            arch: "x86_64".to_string(),
-            cpu: "Test CPU".to_string(),
-            gpu: "Test GPU".to_string(),
-            ram: "16GB".to_string(),
-            log_b64: "dGVzdA==".to_string(),
-            log_filename: "bmm_test.log".to_string(),
-        };
-        let json = serde_json::to_string(&payload).unwrap();
-        assert!(json.contains("Test Bug"));
-        assert!(json.contains("mm_version"));
-        assert!(json.contains("log_b64"));
-    }
-
-    #[test]
-    fn test_report_payload_all_fields_present() {
-        let payload = ReportPayload {
-            title: "t",
-            description: "d",
-            mm_version: "v",
-            os: "o".to_string(),
-            arch: "a".to_string(),
-            cpu: "c".to_string(),
-            gpu: "g".to_string(),
-            ram: "r".to_string(),
-            log_b64: "l".to_string(),
-            log_filename: "f".to_string(),
-        };
-        let json = serde_json::to_string(&payload).unwrap();
-        // All expected fields should be present
-        for field in [
-            "title",
-            "description",
-            "mm_version",
-            "os",
-            "arch",
-            "cpu",
-            "gpu",
-            "ram",
-            "log_b64",
-            "log_filename",
-        ] {
-            assert!(json.contains(field), "Missing field: {}", field);
+    fn sys() -> SystemSummary {
+        SystemSummary {
+            os: "macos | macOS 26.0".into(),
+            arch: "aarch64".into(),
+            cpu: "Apple M4".into(),
+            gpu: "Apple M4".into(),
+            ram: "16GB".into(),
         }
+    }
+
+    #[test]
+    fn issue_url_encodes_and_includes_template_version_and_caps_length() {
+        let url = issue_url("Crash & burn", "It broke\nbadly", "0.4.1", &sys());
+        assert!(url.starts_with(
+            "https://github.com/rursache/balatro-mod-manager/issues/new?template=bug_report.yml&title=Crash%20%26%20burn&version=0.4.1&additional-info="
+        ));
+        assert!(url.contains("It%20broke%0Abadly"));
+        assert!(url.contains("Apple%20M4"));
+        assert!(!url.contains(' '));
+
+        let long = "x".repeat(50_000);
+        let capped = issue_url("t", &long, "0.4.1", &sys());
+        assert!(capped.len() <= ISSUE_URL_MAX_LEN);
+        assert!(capped.contains("xxx..."));
+
+        let wide = "\u{1F600}".repeat(5_000);
+        assert!(issue_url("t", &wide, "0.4.1", &sys()).len() <= ISSUE_URL_MAX_LEN);
     }
 
     #[test]

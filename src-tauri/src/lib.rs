@@ -1,9 +1,9 @@
-mod analytics;
 mod assets;
 mod bmi;
 pub mod commands;
 mod compat_helper;
 mod lfs;
+mod links;
 mod models;
 mod state;
 mod thumb_queue;
@@ -106,25 +106,6 @@ pub fn run() {
                     && let Ok(rpc) = state.discord_rpc.try_lock()
                 {
                     rpc.set_enabled(discord_rpc_enabled);
-                }
-
-                // Track app_launch if analytics is not opted out
-                match db.is_analytics_enabled() {
-                    Ok(true) => {
-                        let version = env!("CARGO_PKG_VERSION").to_string();
-                        tauri::async_runtime::spawn(async move {
-                            // Page view first — makes the Overview dashboard count visits
-                            crate::analytics::send_pageview().await;
-                            crate::analytics::send_event(
-                                "app_launch",
-                                serde_json::json!({}),
-                                &version,
-                            )
-                            .await;
-                        });
-                    }
-                    Ok(false) => {}
-                    Err(e) => log::warn!("Failed to read analytics setting: {e}"),
                 }
 
                 // Remove legacy GitHub-based local clone directory if it exists
@@ -514,7 +495,7 @@ pub fn run() {
             commands::repo::batch_fetch_thumbnails_repo,
             commands::thumbnails::enqueue_thumbnails,
             commands::thumbnails::enqueue_thumbnail,
-            commands::report::submit_report,
+            commands::report::build_issue_report_url,
             commands::report::get_latest_log,
             commands::report::get_logs_folder,
             commands::mods::is_mod_enabled,
@@ -552,9 +533,6 @@ pub fn run() {
             commands::health::check_health,
             commands::health::reset_database,
             commands::health::clear_app_state,
-            commands::analytics::get_analytics_status,
-            commands::analytics::set_analytics_status,
-            commands::analytics::track_event,
             exit_application
         ])
         .build(tauri::generate_context!());

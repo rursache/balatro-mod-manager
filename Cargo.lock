@@ -327,7 +327,6 @@ name = "balatro-mod-manager"
 version = "0.4.1"
 dependencies = [
  "assert_fs",
- "base64 0.22.1",
  "bmm-lib",
  "dirs",
  "fix-path-env",

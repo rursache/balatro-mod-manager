@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Activity, BookOpen, Coffee } from "lucide-svelte";
+  import { BookOpen, Coffee } from "lucide-svelte";
   import { Confetti } from "svelte-confetti";
   import { openExternal } from "$lib/opener";
 
@@ -53,14 +53,6 @@
         >
           <BookOpen size={20} />
           <span>Visit Wiki</span>
-        </button>
-        <button
-          class="status-button"
-          on:click={() =>
-            openExternal("https://status.dasguney.com/status/bmm")}
-        >
-          <Activity size={20} />
-          <span>Status Page</span>
         </button>
         <button class="kofi-button" on:click={handleKofiClick}>
           <div class="confetti-container">
@@ -214,33 +206,6 @@
     transform: scale(0.95);
   }
 
-  .status-button {
-    background-color: #42c670;
-    border: 4px solid #f4eee0;
-    border-radius: 8px;
-    color: #04121f;
-    padding: 0.5rem 1rem;
-    font-family: "M6X11", sans-serif;
-    font-size: 1.2rem;
-    cursor: pointer;
-    transition: all 0.2s ease;
-    box-shadow: 0 0 10px rgba(0, 0, 0, 0.3);
-    margin: 0;
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    position: relative;
-  }
-
-  .status-button:hover {
-    background-color: #35b260;
-    transform: scale(1.05);
-  }
-
-  .status-button:active {
-    transform: scale(0.95);
-  }
-
   h2 {
     font-size: 2.5rem;
     margin-bottom: 1rem;
@@ -316,10 +281,6 @@
       padding: 0.4rem 0.8rem;
     }
     .kofi-button {
-      font-size: 1rem;
-      padding: 0.4rem 0.8rem;
-    }
-    .status-button {
       font-size: 1rem;
       padding: 0.4rem 0.8rem;
     }

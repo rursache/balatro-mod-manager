@@ -99,7 +99,6 @@ describe("Settings view", () => {
           compat_helper: true,
           linux_prefix: "",
           launch_mode: "modded",
-          analytics_enabled: true,
         };
       }
       if (command === "get_balatro_path") {
@@ -176,6 +175,20 @@ describe("Settings view", () => {
     expect(get(catalogLastRefreshed)).toBeNull();
     expect(get(cachedVersions)).toEqual({ steamodded: [], talisman: [] });
     expect(get(descriptionsStore)).toEqual({});
+  });
+
+  it("has no analytics or privacy toggle", async () => {
+    render(Settings);
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("get_all_settings");
+    });
+    expect(screen.queryByText(/anonymous usage data/i)).toBeNull();
+    expect(screen.queryByRole("heading", { name: /privacy/i })).toBeNull();
+    expect(invokeMock).not.toHaveBeenCalledWith(
+      "set_analytics_status",
+      expect.anything(),
+    );
   });
 
   it("shows and toggles fullscreen state", async () => {

@@ -873,20 +873,6 @@ impl Database {
             Ok("modded".to_string())
         }
     }
-
-    /// Returns whether analytics is enabled. Defaults to `true` (opt-out model).
-    pub fn is_analytics_enabled(&self) -> Result<bool, AppError> {
-        match self.get_setting("analytics_enabled")? {
-            Some(v) => Ok(v == "enabled"),
-            None => Ok(true), // enabled by default
-        }
-    }
-
-    /// Persist the analytics preference.
-    pub fn set_analytics_enabled(&self, enabled: bool) -> Result<(), AppError> {
-        let value = if enabled { "enabled" } else { "disabled" };
-        self.set_setting("analytics_enabled", value)
-    }
 }
 
 fn resolve_storage_path(primary_balatro_dir: &Path) -> PathBuf {
@@ -1087,24 +1073,6 @@ mod tests {
         // REPLACE writes a fresh row.
         db.add_installed_mod("Foo", "/p/foo", &[], None)?;
         assert!(!db.get_mod_details("Foo")?.orphaned);
-        Ok(())
-    }
-
-    #[test]
-    fn test_analytics_enabled_default_is_true() -> Result<(), AppError> {
-        let db = create_memory_db()?;
-        // Fresh DB has no analytics_enabled setting → should default to true
-        assert!(db.is_analytics_enabled()?);
-        Ok(())
-    }
-
-    #[test]
-    fn test_analytics_enabled_roundtrip() -> Result<(), AppError> {
-        let db = create_memory_db()?;
-        db.set_analytics_enabled(false)?;
-        assert!(!db.is_analytics_enabled()?);
-        db.set_analytics_enabled(true)?;
-        assert!(db.is_analytics_enabled()?);
         Ok(())
     }
 }

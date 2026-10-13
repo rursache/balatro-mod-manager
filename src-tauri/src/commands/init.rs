@@ -87,7 +87,6 @@ pub struct AllSettings {
     pub compat_helper: bool,
     pub linux_prefix: String,
     pub launch_mode: String,
-    pub analytics_enabled: bool,
 }
 
 /// Single IPC call that returns all settings for the Settings page.
@@ -105,7 +104,6 @@ pub async fn get_all_settings(state: tauri::State<'_, AppState>) -> Result<AllSe
         .map_err(|e| e.to_string())?
         .unwrap_or_default();
     let launch_mode = map_error(db.get_launch_mode())?;
-    let analytics_enabled = db.is_analytics_enabled().map_err(|e| e.to_string())?;
 
     Ok(AllSettings {
         discord_rpc,
@@ -114,7 +112,6 @@ pub async fn get_all_settings(state: tauri::State<'_, AppState>) -> Result<AllSe
         compat_helper,
         linux_prefix,
         launch_mode,
-        analytics_enabled,
     })
 }
 
@@ -257,7 +254,6 @@ mod tests {
             compat_helper: false,
             linux_prefix: "steam -applaunch 2379780".to_string(),
             launch_mode: "modded".to_string(),
-            analytics_enabled: true,
         };
 
         let json = serde_json::to_string(&settings).expect("should serialize");
@@ -266,7 +262,6 @@ mod tests {
         assert!(json.contains("\"background_enabled\":true"));
         assert!(json.contains("\"compat_helper\":false"));
         assert!(json.contains("\"linux_prefix\":\"steam -applaunch 2379780\""));
-        assert!(json.contains("\"analytics_enabled\":true"));
     }
 
     #[test]

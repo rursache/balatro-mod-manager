@@ -3,6 +3,7 @@
   import { Bug } from "lucide-svelte";
   import { addMessage } from "$lib/stores";
   import { invoke } from "@tauri-apps/api/core";
+  import { openExternal } from "$lib/opener";
   import DiscordFab from "./DiscordFab.svelte";
   import { reportIssueStore } from "../stores/modStore";
 
@@ -41,18 +42,32 @@
     submitting = true;
     try {
       const mm_version = await invoke<string>("get_app_version");
-      await invoke("submit_report", {
+      const url = await invoke<string>("build_issue_report_url", {
         title,
         description,
         mmVersion: mm_version,
       });
-      addMessage("Issue reported!", "success");
+      let logCopied = false;
+      try {
+        const [, text] = await invoke<[string, string]>("get_latest_log");
+        await navigator.clipboard.writeText(text);
+        logCopied = true;
+      } catch (e) {
+        console.warn("Could not copy the latest log:", e);
+      }
+      await openExternal(url);
+      addMessage(
+        logCopied
+          ? "Opened GitHub issue form, the log was copied to your clipboard"
+          : "Opened GitHub issue form, please attach the latest log from the logs folder",
+        "success",
+      );
       resetForm();
       close();
     } catch (e) {
       reportError = e instanceof Error ? e.message : String(e);
-      console.error("Error reporting the issue:", e);
-      addMessage("Error reporting the issue!", "error");
+      console.error("Error opening the issue form:", e);
+      addMessage("Could not open the GitHub issue form", "error");
       // Offer to copy logs to clipboard
       showCopyPrompt = true;
       close();
@@ -134,8 +149,9 @@
         <h2>Report an issue</h2>
       </div>
       <p class="desc">
-        The report will contain logs from the mod manager and minimal hardware
-        information to assist with troubleshooting.
+        This opens a prefilled GitHub issue with minimal hardware information.
+        The latest log is copied to your clipboard so you can paste or attach it
+        there.
       </p>
 
       <label class="input-label" for="report-title">Title</label>
@@ -165,7 +181,7 @@
           >Cancel</button
         >
         <button class="submit" onclick={handleSubmit} disabled={submitting}>
-          {#if submitting}Submitting...{:else}Submit{/if}
+          {#if submitting}Opening...{:else}Open GitHub Issue{/if}
         </button>
       </div>
     </div>
@@ -178,7 +194,7 @@
       class="modal"
       transition:scale={{ duration: 160, start: 0.95, opacity: 1 }}
     >
-      <h2>Reporting the issue failed.</h2>
+      <h2>Opening the issue form failed</h2>
       <p class="desc">Would you like to copy the log to your clipboard?</p>
       {#if reportError}
         <p class="desc error">Reason: {reportError}</p>

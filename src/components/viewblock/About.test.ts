@@ -23,15 +23,10 @@ describe("About view", () => {
     );
   });
 
-  it("opens the BMM status page when status button is clicked", async () => {
+  it("has no link to the retired status page", () => {
     render(About);
 
-    const statusButton = screen.getByRole("button", { name: /status page/i });
-    await fireEvent.click(statusButton);
-
-    expect(openExternal).toHaveBeenCalledWith(
-      "https://status.dasguney.com/status/bmm",
-    );
+    expect(screen.queryByRole("button", { name: /status page/i })).toBeNull();
   });
 
   it("opens the Ko-fi page when support button is clicked", async () => {
