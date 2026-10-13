@@ -29,30 +29,12 @@ use bmm_lib::local_mod_detection;
 #[cfg(target_os = "macos")]
 use bmm_lib::lovely;
 #[cfg(target_os = "linux")]
-use bmm_lib::lovely::ensure_version_dll_exists;
-#[cfg(target_os = "windows")]
-use bmm_lib::lovely::ensure_version_dll_exists;
-#[cfg(target_os = "linux")]
-use bmm_lib::lovely::{ensure_love_binary, ensure_lovely_so_exists, get_latest_lovely_version};
-
-/// Check if the installed Lovely version supports the --vanilla flag (0.9.0+)
+use bmm_lib::lovely::{
+    ensure_love_binary, ensure_lovely_so_exists, get_latest_lovely_version,
+    merge_wine_dll_overrides,
+};
 #[cfg(any(target_os = "windows", target_os = "linux"))]
-fn supports_vanilla_flag(version: Option<&str>) -> bool {
-    let Some(version) = version else {
-        return false;
-    };
-    // Strip 'v' prefix if present
-    let version = version.strip_prefix('v').unwrap_or(version);
-    // Parse major.minor.patch
-    let parts: Vec<&str> = version.split('.').collect();
-    if parts.is_empty() {
-        return false;
-    }
-    let major: u32 = parts.first().and_then(|s| s.parse().ok()).unwrap_or(0);
-    let minor: u32 = parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(0);
-    // --vanilla flag was added in 0.9.0
-    major > 0 || (major == 0 && minor >= 9)
-}
+use bmm_lib::lovely::{ensure_win_injector, supports_vanilla_flag};
 use bmm_lib::smods_installer::{ModInstaller, ModType};
 use bmm_lib::{cache, database::InstalledMod};
 #[cfg(target_os = "linux")]
@@ -94,6 +76,23 @@ fn refresh_mod_detection_cache() {
     local_mod_detection::clear_detection_cache();
 }
 
+/// Stores the Lovely version when a launch had to download Lovely, so the UI
+/// does not offer an update for the release that was just installed
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+fn record_installed_lovely_version(
+    state: &tauri::State<'_, AppState>,
+    ensured: &bmm_lib::lovely::EnsuredLovely,
+) {
+    let Some(version) = &ensured.installed_version else {
+        return;
+    };
+    let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
+    match db.set_lovely_version(version) {
+        Ok(()) => log::info!("Recorded Lovely {version} installed during launch"),
+        Err(e) => log::warn!("Failed to record Lovely version {version}: {e}"),
+    }
+}
+
 #[cfg(target_os = "macos")]
 #[tauri::command]
 pub async fn launch_balatro(state: tauri::State<'_, AppState>) -> Result<(), String> {
@@ -125,32 +124,26 @@ pub async fn launch_balatro(state: tauri::State<'_, AppState>) -> Result<(), Str
 
     // Only get lovely path if launching in modded mode
     let lovely_path: Option<PathBuf> = if !is_vanilla {
-        Some(map_error(lovely::ensure_lovely_exists().await)?)
+        let ensured = map_error(lovely::ensure_lovely_exists().await)?;
+        record_installed_lovely_version(&state, &ensured);
+        Some(ensured.path)
     } else {
         None
     };
 
     if lovely_console_enabled {
-        let disable_arg = if !lovely_console_enabled {
-            " --disable-console"
-        } else {
-            ""
-        };
-
         let command_line = if let Some(ref lovely) = lovely_path {
             format!(
-                "cd '{}' && DYLD_INSERT_LIBRARIES='{}' '{}'{}",
+                "cd '{}' && DYLD_INSERT_LIBRARIES='{}' '{}'",
                 launch_root.display(),
                 lovely.display(),
-                balatro_executable.display(),
-                disable_arg
+                balatro_executable.display()
             )
         } else {
             format!(
-                "cd '{}' && '{}'{}",
+                "cd '{}' && '{}'",
                 launch_root.display(),
-                balatro_executable.display(),
-                disable_arg
+                balatro_executable.display()
             )
         };
 
@@ -434,10 +427,11 @@ pub async fn launch_balatro(state: tauri::State<'_, AppState>) -> Result<(), Str
     let path = PathBuf::from(path_str);
     let is_vanilla = launch_mode == "vanilla";
 
-    // Always ensure version.dll exists so modded mode works after vanilla launch
-    ensure_version_dll_exists(&path)
+    // Always ensure the injector exists so modded mode works after vanilla launch
+    let ensured = ensure_win_injector(&path)
         .await
-        .map_err(|e| format!("Failed to ensure version.dll: {e}"))?;
+        .map_err(|e| format!("Failed to ensure Lovely injector: {e}"))?;
+    record_installed_lovely_version(&state, &ensured);
 
     let mut cmd = Command::new(path.join("Balatro.exe"));
 
@@ -543,10 +537,18 @@ pub async fn launch_balatro(state: tauri::State<'_, AppState>) -> Result<(), Str
         validate_prefix_executable(&cmd_parts[0])?;
         ensure_prefix_log_dir(&envs)?;
 
-        // Always ensure version.dll exists so modded mode works after vanilla launch
-        ensure_version_dll_exists(&path)
+        // Always ensure the injector exists so modded mode works after vanilla launch
+        let ensured = ensure_win_injector(&path)
             .await
-            .map_err(|e| format!("Failed to ensure version.dll: {e}"))?;
+            .map_err(|e| format!("Failed to ensure Lovely injector: {e}"))?;
+        record_installed_lovely_version(&state, &ensured);
+        // winmm for Lovely 0.10+, version for an older install that is still in place
+        let injector_stem = ensured
+            .path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .unwrap_or("winmm")
+            .to_string();
 
         bmm_lib::local_mod_detection::ensure_proton_mod_dir_link(Some(&path))?;
 
@@ -600,27 +602,20 @@ pub async fn launch_balatro(state: tauri::State<'_, AppState>) -> Result<(), Str
             let winedll_idx = launch_envs
                 .iter()
                 .position(|(key, _)| key.eq_ignore_ascii_case("WINEDLLOVERRIDES"));
+            let existing = winedll_idx.map(|idx| launch_envs[idx].1.as_str());
+            let merged = merge_wine_dll_overrides(existing, &injector_stem);
             match winedll_idx {
                 None => {
-                    launch_envs.push(("WINEDLLOVERRIDES".to_string(), "version=n,b".to_string()));
+                    info!("WINEDLLOVERRIDES not set; defaulting to {merged} for Lovely injection");
+                    launch_envs.push(("WINEDLLOVERRIDES".to_string(), merged));
+                }
+                Some(idx) if launch_envs[idx].1 != merged => {
                     info!(
-                        "WINEDLLOVERRIDES not set; defaulting to version=n,b for Lovely injection"
+                        "WINEDLLOVERRIDES missing {injector_stem}; using {merged} for Lovely injection"
                     );
+                    launch_envs[idx].1 = merged;
                 }
-                Some(idx) => {
-                    let value = launch_envs.get(idx).map(|(_, v)| v.as_str()).unwrap_or("");
-                    if !value.contains("version") {
-                        let updated = if value.is_empty() {
-                            "version=n,b".to_string()
-                        } else {
-                            format!("{value};version=n,b")
-                        };
-                        launch_envs[idx].1 = updated;
-                        info!(
-                            "WINEDLLOVERRIDES missing version; appended version=n,b for Lovely injection"
-                        );
-                    }
-                }
+                Some(_) => {}
             }
         } else {
             info!("Vanilla mode: skipping WINEDLLOVERRIDES injection");
@@ -1209,7 +1204,7 @@ mod tests {
     #[test]
     fn test_is_env_assignment_valid() {
         assert!(is_env_assignment("FOO=bar"));
-        assert!(is_env_assignment("WINEDLLOVERRIDES=version=n,b"));
+        assert!(is_env_assignment("WINEDLLOVERRIDES=winmm=n,b"));
         assert!(is_env_assignment("_VAR=value"));
         assert!(is_env_assignment("VAR123=something"));
         assert!(is_env_assignment("A=B"));
