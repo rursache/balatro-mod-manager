@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { BookOpen } from "lucide-svelte";
+  import { BookOpen, Bug } from "lucide-svelte";
+  import { reportIssueStore } from "../../stores/modStore";
   import Github from "../GithubIcon.svelte";
   import { openExternal } from "$lib/opener";
   import {
@@ -53,6 +54,13 @@
         <button class="github-button" on:click={() => open(APP_REPO_URL)}>
           <Github size={20} />
           <span>GitHub</span>
+        </button>
+        <button
+          class="report-button"
+          on:click={() => reportIssueStore.set({ visible: true })}
+        >
+          <Bug size={20} />
+          <span>Report an issue</span>
         </button>
       </div>
 
@@ -229,6 +237,32 @@
     transform: scale(0.95);
   }
 
+  .report-button {
+    background-color: #56a786;
+    border: 4px solid #f4eee0;
+    border-radius: 8px;
+    color: #fff;
+    padding: 0.5rem 1rem;
+    font-family: "M6X11", sans-serif;
+    font-size: 1.2rem;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    box-shadow: 0 0 10px rgba(0, 0, 0, 0.3);
+    margin: 0;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .report-button:hover {
+    background-color: #74cca8;
+    transform: scale(1.05);
+  }
+
+  .report-button:active {
+    transform: scale(0.95);
+  }
+
   h2 {
     font-size: 2.5rem;
     margin-bottom: 1rem;
@@ -297,7 +331,8 @@
       font-size: 1rem;
       padding: 0.4rem 0.8rem;
     }
-    .github-button {
+    .github-button,
+    .report-button {
       font-size: 1rem;
       padding: 0.4rem 0.8rem;
     }

@@ -30,10 +30,6 @@
     submitting = false;
   }
 
-  function open() {
-    reportIssueStore.set({ visible: true });
-  }
-
   async function handleSubmit() {
     if (!title.trim()) {
       addMessage("Please enter a title.", "warning");
@@ -113,13 +109,6 @@
     }
   }
 </script>
-
-<!-- Floating report button -->
-<div class="fab-group">
-  <button class="report-fab" aria-label="Report an issue" onclick={open}>
-    <Bug size={16} />
-  </button>
-</div>
 
 {#if $reportIssueStore.visible}
   <div
@@ -223,40 +212,6 @@
 {/if}
 
 <style>
-  .fab-group {
-    position: fixed;
-    left: 1rem;
-    bottom: 1rem;
-    display: flex;
-    gap: 0.6rem;
-    align-items: center;
-    z-index: 1500;
-  }
-
-  .report-fab {
-    width: 36px;
-    height: 36px;
-    border-radius: 50%;
-    border: none;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    cursor: pointer;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
-    transition:
-      transform 0.15s ease,
-      opacity 0.15s ease;
-    background: #56a786;
-    outline: 2px solid #74cca8;
-    color: #fff;
-  }
-  .report-fab:hover {
-    transform: scale(1.05);
-  }
-  .report-fab:active {
-    transform: scale(0.98);
-  }
-
   .modal-background {
     position: fixed;
     inset: 0;
@@ -411,12 +366,6 @@
   }
 
   @media (max-width: 1160px) {
-    .report-fab {
-      bottom: 1rem;
-      left: 0.8rem;
-      width: 32px;
-      height: 32px;
-    }
     .modal {
       padding: 1rem 1.5rem 1rem 1rem;
     }

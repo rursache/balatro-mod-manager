@@ -2,6 +2,8 @@ import { render, screen, fireEvent } from "@testing-library/svelte";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import About from "./About.svelte";
 import { openExternal } from "$lib/opener";
+import { get } from "svelte/store";
+import { reportIssueStore } from "../../stores/modStore";
 
 vi.mock("$lib/opener", () => ({
   openExternal: vi.fn(),
@@ -57,6 +59,17 @@ describe("About view", () => {
     render(About);
 
     expect(screen.queryByText(/current version/i)).toBeNull();
+  });
+
+  it("opens the report an issue dialog", async () => {
+    reportIssueStore.set({ visible: false });
+    render(About);
+
+    await fireEvent.click(
+      screen.getByRole("button", { name: /report an issue/i }),
+    );
+
+    expect(get(reportIssueStore).visible).toBe(true);
   });
 
   it("has no Ko-fi or status page links", () => {
