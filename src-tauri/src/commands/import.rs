@@ -232,8 +232,16 @@ fn extract_7z<R: Read + Seek>(reader: R, target_dir: &Path) -> Result<(), String
     std::fs::create_dir_all(target_dir)
         .map_err(|e| format!("Failed to create target directory: {e}"))?;
 
-    sevenz_rust2::decompress(reader, target_dir)
-        .map_err(|e| format!("Failed to extract 7Z archive: {e}"))
+    sevenz_rust2::decompress_with_extract_fn(reader, target_dir, |entry, data, dest| {
+        let name = entry.name().replace('\\', "/");
+        if is_junk_entry(Path::new(&name)) {
+            // Entries in a solid block share one stream, so skipped data must be consumed
+            std::io::copy(data, &mut std::io::sink())?;
+            return Ok(true);
+        }
+        sevenz_rust2::default_entry_extract_fn(entry, data, dest)
+    })
+    .map_err(|e| format!("Failed to extract 7Z archive: {e}"))
 }
 
 fn extract_zip<R: Read + Seek>(reader: R, target_dir: &Path) -> Result<(), String> {
@@ -949,6 +957,83 @@ mod tests {
             !temp_dir.path().join("escaped.lua").exists(),
             "archive escaped the extraction directory"
         );
+    }
+
+    fn solid_7z(entries: &[(&str, &[u8])]) -> Vec<u8> {
+        let mut writer = sevenz_rust2::ArchiveWriter::new(Cursor::new(Vec::new())).unwrap();
+        let archive_entries = entries
+            .iter()
+            .map(|(name, _)| sevenz_rust2::ArchiveEntry::new_file(name))
+            .collect();
+        let readers = entries
+            .iter()
+            .map(|(_, data)| sevenz_rust2::SourceReader::from(Cursor::new(data.to_vec())))
+            .collect();
+        writer
+            .push_archive_entries(archive_entries, readers)
+            .unwrap();
+        writer.finish().unwrap().into_inner()
+    }
+
+    #[test]
+    fn test_extract_7z_skips_macos_junk_in_solid_block() {
+        let temp_dir = TempDir::new().unwrap();
+        let target = temp_dir.path().join("extracted");
+        let archive = solid_7z(&[
+            ("__MACOSX/._init.lua", b"junk junk"),
+            (".DS_Store", b"junk"),
+            ("init.lua", b"-- mod"),
+            ("sub\\.DS_Store", b"junk"),
+            ("sub/main.lua", b"-- main"),
+        ]);
+
+        extract_7z(Cursor::new(archive), &target).unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(target.join("init.lua")).unwrap(),
+            "-- mod"
+        );
+        assert_eq!(
+            std::fs::read_to_string(target.join("sub/main.lua")).unwrap(),
+            "-- main"
+        );
+        assert!(!target.join("__MACOSX").exists());
+        assert!(!target.join(".DS_Store").exists());
+        assert!(!target.join("sub/.DS_Store").exists());
+        assert!(!target.join("sub\\.DS_Store").exists());
+    }
+
+    #[test]
+    fn test_extract_7z_rejects_absolute_and_backslash_traversal() {
+        let temp_dir = TempDir::new().unwrap();
+        let outside = temp_dir.path().join("outside");
+        std::fs::create_dir_all(&outside).unwrap();
+        let abs = outside.join("abs.lua");
+
+        for name in [
+            abs.to_str().unwrap(),
+            "..\\escaped.lua",
+            "a/../../escaped.lua",
+        ] {
+            let target = temp_dir.path().join("extracted");
+            let archive = solid_7z(&[(name, b"pwned")]);
+            assert!(extract_7z(Cursor::new(archive), &target).is_err(), "{name}");
+        }
+        assert!(!abs.exists());
+        assert!(!temp_dir.path().join("escaped.lua").exists());
+    }
+
+    #[test]
+    fn test_extract_archive_7z_uppercase_extension() {
+        let temp_dir = TempDir::new().unwrap();
+        let archive = solid_7z(&[("init.lua", b"-- mod")]);
+
+        let mod_dir =
+            extract_archive_from_reader("MyMod.7Z", Cursor::new(archive), None, temp_dir.path())
+                .unwrap();
+
+        assert_eq!(mod_dir, temp_dir.path().join("MyMod"));
+        assert!(mod_dir.join("init.lua").exists());
     }
 
     #[test]
