@@ -5,6 +5,7 @@
   import About from "../../components/viewblock/About.svelte";
   import LaunchButton from "../../components/LaunchButton.svelte";
   import Mods from "../../components/viewblock/Mods.svelte";
+  import ModView from "../../components/viewblock/ModView.svelte";
   import Settings from "../../components/viewblock/Settings.svelte";
   import RequiresPopup from "../../components/RequiresPopup.svelte";
   import SecurityPopup from "../../components/SecurityPopup.svelte";
@@ -443,7 +444,7 @@
 
   {#if currentSection === "mods" && startupResolved && showsPagination($currentCategory)}
     <div class="pagination-footer">
-      {#if !$currentModView && $paginationWindow.totalPages > 1}
+      {#if $paginationWindow.totalPages > 1}
         <div
           class="pagination-controls"
           in:fade={{ duration: 150 }}
@@ -471,6 +472,14 @@
         </div>
       {/if}
     </div>
+  {/if}
+
+  <!-- Mod details open as a modal over the current tab, which stays mounted with its scroll -->
+  {#if $currentModView}
+    <ModView
+      mod={$currentModView}
+      onCheckDependencies={handleDependencyCheck}
+    />
   {/if}
 
   <RequiresPopup />

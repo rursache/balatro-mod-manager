@@ -1,15 +1,18 @@
 <script lang="ts">
-  import { fade } from "svelte/transition";
+  import { fade, scale } from "svelte/transition";
   import { cubicOut } from "svelte/easing";
   import {
     Download,
     Trash2,
     User,
-    ArrowLeft,
+    X,
     RefreshCw,
+    RotateCcw,
     Layers,
     ExternalLink,
     ArrowDownToLine,
+    Check,
+    Package,
   } from "lucide-svelte";
   import Github from "../GithubIcon.svelte";
   import LastUpdated from "./LastUpdated.svelte";
@@ -24,7 +27,7 @@
     currentPage,
     modEnabledStore,
   } from "../../stores/modStore";
-  import type { InstalledMod, Mod } from "../../stores/modStore";
+  import type { Category, InstalledMod, Mod } from "../../stores/modStore";
   import { marked } from "marked";
   import { invoke } from "@tauri-apps/api/core";
   import { listen } from "@tauri-apps/api/event";
@@ -37,7 +40,14 @@
   import { descriptionsStore, setDescription } from "../../stores/descriptions";
   import LazyImage from "../common/LazyImage.svelte";
   import { isLinuxPlatform } from "$lib/platform";
-  import { isAnyPopupOpen } from "../../stores/popupManager";
+  import { hasActivePopup } from "../../stores/popupManager";
+  import { getTopModal, modal } from "../../utils/modalStack";
+  import { reinstallMod } from "../../stores/reinstall";
+  import {
+    hasSourceSwitch,
+    reinstallTarget,
+    specialInstaller,
+  } from "../../utils/reinstall";
   import { openExternal } from "$lib/opener";
   import {
     openCollectionPicker,
@@ -92,7 +102,7 @@
   const isDefaultCover = (imageUrl?: string | null) =>
     !!imageUrl && imageUrl.includes("cover.jpg");
   function handleAuxClick(event: MouseEvent) {
-    if (event.button === 3) {
+    if (event.button === 3 && isTopLayer()) {
       event.preventDefault();
       handleBack();
     }
@@ -100,7 +110,7 @@
 
   const getCategoryName = categoryLabel;
 
-  let installedMods: InstalledMod[] = [];
+  let installedMods = $state<InstalledMod[]>([]);
   let steamoddedVersions = $state<string[]>([]);
   let talismanVersions = $state<string[]>([]);
   let selectedVersion = $state("newest");
@@ -348,7 +358,8 @@
 
   const linkCache = new Map<string, internalModLinkData>();
 
-  let modView: HTMLDivElement;
+  let modView = $state<HTMLDivElement>();
+  let panelBody = $state<HTMLDivElement>();
   let descriptionText = $derived(
     mod ? ($descriptionsStore[mod.title] ?? mod.description ?? "") : "",
   );
@@ -1021,15 +1032,46 @@
     );
   }
 
+  // Popups opened above the details (confirmations, pickers) own the keyboard
+  function isTopLayer(): boolean {
+    return !!modView && getTopModal() === modView && !get(hasActivePopup);
+  }
+
+  function handleModalEscape() {
+    if (!get(hasActivePopup)) handleBack();
+  }
+
   function handleWindowKeydown(e: KeyboardEvent) {
-    // Escape belongs to the topmost popup while one is open
-    if (e.defaultPrevented || isAnyPopupOpen()) return;
-    if (
-      e.key === "Escape" ||
-      (e.key === "Backspace" && !isEditableTarget(e.target))
-    ) {
+    if (e.defaultPrevented || !isTopLayer()) return;
+    if (e.key === "Backspace" && !isEditableTarget(e.target)) {
       handleBack();
     }
+  }
+
+  let pressStartedOnBackdrop = false;
+
+  function handleBackdropMousedown(e: MouseEvent) {
+    pressStartedOnBackdrop = e.target === e.currentTarget;
+  }
+
+  function handleBackdropClick(e: MouseEvent) {
+    const fromBackdrop = pressStartedOnBackdrop;
+    pressStartedOnBackdrop = false;
+    if (fromBackdrop && e.target === e.currentTarget) handleBack();
+  }
+
+  function openCategory(category: Category) {
+    currentPage.set(1);
+    currentModView.set(null);
+    currentCategory.set(getCategoryName(category));
+    setTimeout(() => {
+      const modsContainer = document.querySelector(".mods-scroll-container");
+      if (modsContainer) {
+        modsContainer.scrollTo({ top: 0, behavior: "smooth" });
+      } else {
+        window.scrollTo({ top: 0, behavior: "smooth" });
+      }
+    }, 50);
   }
 
   onMount(async () => {
@@ -1195,7 +1237,8 @@
   });
 
   // Thunderstore side: source picker for merged mods and the dependency plan
-  let isMerged = $derived(mod.source === "merged" && Boolean(mod.thunderstore));
+  let special = $derived(specialInstaller(mod));
+  let canSwitchSource = $derived(hasSourceSwitch(mod));
   let trackedSource = $state<InstallSourceName | null>(null);
   let chosenSource = $state<InstallSourceName | null>(null);
   let selectedSource = $derived<InstallSourceName>(
@@ -1223,6 +1266,7 @@
     chosenSource = null;
     plan = null;
     planError = null;
+    if (panelBody) panelBody.scrollTop = 0;
   });
 
   /** Explicit source for the backend, updates keep the tracked source unless the user switched */
@@ -1282,238 +1326,375 @@
     void $installationStatus[mod.title];
     getAllInstalledMods().then(refreshTrackedSource);
   });
+
+  let isInstalled = $derived(Boolean($installationStatus[mod.title]));
+  let installedRow = $derived(
+    isInstalled
+      ? findInstalledRow(mod, indexInstalledRows(installedMods))
+      : null,
+  );
+  let installedVersion = $derived(
+    installedRow?.current_version?.trim() || mod.installedVersion || "",
+  );
+  let modEnabled = $derived($modEnabledStore[mod.title] ?? isEnabled);
+  let busy = $derived(Boolean($loadingStates[mod.title]));
+
+  // Steamodded and Talisman reinstall the tag picked here, the installed one by default
+  let reinstallVersion = $state("");
+  $effect(() => {
+    const version = installedVersion;
+    untrack(() => (reinstallVersion = version));
+  });
+  let specialVersions = $derived(
+    special === "steamodded"
+      ? steamoddedVersions
+      : special === "talisman"
+        ? talismanVersions
+        : [],
+  );
+  let reinstallOptions = $derived.by(() => {
+    const versions = [...specialVersions];
+    if (installedVersion && !versions.includes(installedVersion)) {
+      versions.unshift(installedVersion);
+    }
+    return versions.map((v) => ({
+      value: v,
+      label: v === installedVersion ? `${v} (installed)` : v,
+    }));
+  });
+  let reinstallInfo = $derived(
+    reinstallTarget(mod, installedRow, special ? reinstallVersion : null),
+  );
+
+  async function handleReinstall() {
+    const result = await reinstallMod(mod, {
+      version: special ? reinstallVersion : null,
+    });
+    if (!result) return;
+    await getAllInstalledMods();
+    refreshTrackedSource();
+    if (usesCatalogInstall(mod)) {
+      planKey = "";
+      void loadPlan(mod, selectedSource);
+    }
+  }
+
+  const SOURCE_LABELS: Record<InstallSourceName, string> = {
+    thunderstore: "Thunderstore",
+    index: "Mod index",
+  };
+
+  let sourceInfo = $derived.by(() => {
+    if (special) {
+      return {
+        label: "GitHub releases",
+        title: `${mod.title} is always installed with the built in ${special === "steamodded" ? "Steamodded" : "Talisman"} installer`,
+      };
+    }
+    const source: InstallSourceName =
+      trackedSource ??
+      (mod.source === "thunderstore" ? "thunderstore" : "index");
+    return { label: SOURCE_LABELS[source], title: "" };
+  });
+
+  let showSwitch = $derived(
+    canSwitchSource &&
+      isInstalled &&
+      trackedSource !== null &&
+      chosenSource !== null &&
+      chosenSource !== trackedSource,
+  );
 </script>
 
 <svelte:window onkeydown={handleWindowKeydown} />
 
 <div
-  class="mod-view default-scrollbar"
-  transition:fade={{ duration: 300, easing: cubicOut }}
+  class="mod-view-backdrop"
+  role="presentation"
   bind:this={modView}
+  transition:fade={{ duration: 160, easing: cubicOut }}
+  use:modal={{ onEscape: handleModalEscape, initialFocus: ".close-button" }}
+  onmousedown={handleBackdropMousedown}
+  onclick={handleBackdropClick}
 >
-  <div class="mod-content">
-    <div class="header-container">
-      <div class="header">
-        <button class="back-button" onclick={handleBack}>
-          <ArrowLeft size={20} /> <span>Back</span>
-        </button>
+  <div
+    class="mod-panel"
+    role="dialog"
+    aria-modal="true"
+    aria-labelledby="mod-view-title"
+    transition:scale={{ duration: 160, start: 0.97, opacity: 1 }}
+  >
+    <header class="panel-header">
+      <div class="title-block">
+        <h2 id="mod-view-title">{mod.title}</h2>
+        <span class="byline">
+          <User size={14} />
+          {mod.publisher}
+        </span>
       </div>
-    </div>
+      <button
+        type="button"
+        class="close-button"
+        aria-label="Close"
+        title="Close"
+        onclick={handleBack}
+      >
+        <X size={20} />
+      </button>
+    </header>
 
-    <h2>{mod.title}</h2>
-    <div class="content-grid">
-      <div class="left-column">
-        <div class="image-container">
-          {#if !isDefaultCover(mod.image)}
-            <button
-              class="image-button"
-              aria-label={`View full size image of ${mod.title}`}
-            >
-              <LazyImage
-                src={mod.image}
-                fallbackSrc={mod.imageFallback}
-                alt={mod.title}
-                cacheTitle={mod.title}
-                cacheId={mod._dirName}
-                remoteSrc={mod.thumbnailUrl}
-                hasThumbnail={mod._hasThumbnail !== false}
-              />
-            </button>
-          {:else}
-            <LazyImage
-              src={mod.image}
-              fallbackSrc={mod.imageFallback}
-              alt={mod.title}
-              cacheTitle={mod.title}
-              cacheId={mod._dirName}
-              remoteSrc={mod.thumbnailUrl}
-              hasThumbnail={mod._hasThumbnail !== false}
-            />
-          {/if}
+    <div class="panel-body default-scrollbar" bind:this={panelBody}>
+      <aside class="side-column">
+        <div class="cover" class:default-cover={isDefaultCover(mod.image)}>
+          <LazyImage
+            src={mod.image}
+            fallbackSrc={mod.imageFallback}
+            alt={mod.title}
+            cacheTitle={mod.title}
+            cacheId={mod._dirName}
+            remoteSrc={mod.thumbnailUrl}
+            hasThumbnail={mod._hasThumbnail !== false}
+          />
         </div>
 
-        <div class="button-container">
-          <!-- Enable/Disable toggle button - MOVED TO FIRST POSITION -->
-          {#if $installationStatus[mod.title]}
+        <div class="action-row">
+          {#if isInstalled}
             <button
-              class="toggle-button"
-              class:enabled={$modEnabledStore[mod.title] ?? isEnabled}
-              class:disabled={!($modEnabledStore[mod.title] ?? isEnabled)}
-              title={($modEnabledStore[mod.title] ?? isEnabled)
-                ? "Disable Mod"
-                : "Enable Mod"}
+              type="button"
+              class="btn toggle-button"
+              class:enabled={modEnabled}
+              aria-pressed={modEnabled}
+              title={modEnabled ? "Disable Mod" : "Enable Mod"}
               onclick={toggleModEnabled}
             >
-              {#if $modEnabledStore[mod.title] ?? isEnabled}
-                ON
+              {modEnabled ? "ON" : "OFF"}
+            </button>
+          {/if}
+
+          {#if isInstalled && $updateAvailableStore[mod.title] && !mod.orphaned}
+            <button
+              type="button"
+              class="btn primary update-button"
+              onclick={() => updateMod(mod)}
+              disabled={busy}
+            >
+              {#if busy}
+                <div class="spinner"></div>
               {:else}
-                OFF
+                <RefreshCw size={16} />
+                Update
+              {/if}
+            </button>
+          {:else}
+            <button
+              type="button"
+              class="btn primary download-button"
+              class:installed={isInstalled}
+              disabled={isInstalled || busy}
+              onclick={() => installMod(mod)}
+            >
+              {#if busy}
+                <div class="spinner"></div>
+              {:else if isInstalled}
+                <Check size={16} />
+                Installed
+              {:else}
+                <Download size={16} />
+                Download
               {/if}
             </button>
           {/if}
 
+          {#if reinstallInfo}
+            <button
+              type="button"
+              class="btn icon-button"
+              aria-label="Reinstall"
+              title={reinstallInfo.version
+                ? `Reinstall ${reinstallInfo.version}`
+                : "Reinstall"}
+              disabled={busy}
+              onclick={handleReinstall}
+            >
+              <RotateCcw size={16} />
+            </button>
+          {/if}
+
           <button
-            class="collection-button"
+            type="button"
+            class="btn icon-button"
+            aria-label="Collections"
             title="Collections"
             onclick={() => openCollectionPicker(mod.title, mod.id)}
           >
-            <Layers size={18} />
+            <Layers size={16} />
           </button>
 
-          {#if $installationStatus[mod.title] && $updateAvailableStore[mod.title] && !mod.orphaned}
-            <!-- Update button (when installed and update available) -->
+          {#if isInstalled}
             <button
-              class="update-button"
-              onclick={() => updateMod(mod)}
-              disabled={$loadingStates[mod.title]}
-            >
-              {#if $loadingStates[mod.title]}
-                <div class="spinner"></div>
-              {:else}
-                <RefreshCw size={18} />
-                Update Mod
-              {/if}
-            </button>
-          {:else}
-            <!-- Regular download/installed button -->
-            <button
-              class="download-button"
-              class:installed={$installationStatus[mod.title]}
-              disabled={$installationStatus[mod.title] ||
-                $loadingStates[mod.title]}
-              onclick={() => installMod(mod)}
-            >
-              {#if $loadingStates[mod.title]}
-                <div class="spinner"></div>
-              {:else}
-                <Download size={18} />
-                {$installationStatus[mod.title] ? "Installed" : "Download"}
-              {/if}
-            </button>
-          {/if}
-
-          {#if $installationStatus[mod.title]}
-            <button
-              class="delete-button"
+              type="button"
+              class="btn icon-button danger"
+              aria-label="Remove Mod"
               title="Remove Mod"
+              disabled={busy}
               onclick={() => uninstallMod(mod)}
             >
-              <Trash2 size={18} />
+              <Trash2 size={16} />
             </button>
           {/if}
         </div>
 
-        {#if isMerged}
-          <div class="source-picker" role="group" aria-label="Install source">
-            <span class="source-label">Source</span>
-            {#each ["thunderstore", "index"] as const as option (option)}
-              <button
-                type="button"
-                class="source-option"
-                class:active={selectedSource === option}
-                aria-pressed={selectedSource === option}
-                disabled={$loadingStates[mod.title]}
-                onclick={() => (chosenSource = option)}
-              >
-                {option === "thunderstore" ? "Thunderstore" : "Index"}
-                {#if trackedSource === option}
-                  <span class="source-current">installed</span>
+        {#if special}
+          <div class="field">
+            <span class="field-label">Version</span>
+            <div class="field-control version-selector">
+              {#if loadingVersions}
+                <span class="field-note">Loading versions...</span>
+              {:else if isInstalled}
+                {#if reinstallOptions.length === 0}
+                  <span class="field-note">No versions available</span>
+                {:else}
+                  <CustomDropdown
+                    options={reinstallOptions}
+                    bind:value={reinstallVersion}
+                    disabled={busy}
+                    placeholder="Select version"
+                  />
                 {/if}
-              </button>
-            {/each}
+              {:else if (special === "steamodded" ? steamoddedVersions : talismanVersions).length === 0}
+                <span class="field-note">No versions available</span>
+              {:else}
+                <CustomDropdown
+                  options={special === "steamodded"
+                    ? steamoddedOptions
+                    : talismanOptions}
+                  bind:value={selectedVersion}
+                  disabled={busy}
+                  placeholder="Select version"
+                />
+              {/if}
+            </div>
           </div>
-          {#if $installationStatus[mod.title] && trackedSource && chosenSource && chosenSource !== trackedSource}
-            <button
-              class="switch-source-button"
-              onclick={switchSource}
-              disabled={$loadingStates[mod.title]}
-            >
-              <RefreshCw size={16} />
-              Switch to {chosenSource === "thunderstore"
-                ? "Thunderstore"
-                : "the index"}
-            </button>
+          {#if isInstalled && reinstallInfo}
+            <p class="field-hint">Reinstall installs the selected version</p>
           {/if}
         {/if}
 
-        {#if mod.title.toLowerCase() === "talisman" && !$installationStatus[mod.title]}
-          <div class="version-selector">
-            {#if loadingVersions}
-              <div class="loading-text">Loading versions...</div>
-            {:else if talismanVersions.length === 0}
-              <div class="loading-text">No versions available</div>
-            {:else}
-              <CustomDropdown
-                options={talismanOptions}
-                bind:value={selectedVersion}
-                disabled={$loadingStates[mod.title]}
-                placeholder="Select version"
-              />
-            {/if}
-          </div>
+        <div class="field">
+          <span class="field-label">Source</span>
+          {#if canSwitchSource}
+            <div class="field-control source-control">
+              <div
+                class="segmented"
+                role="group"
+                aria-label="Install source"
+                data-testid="source-picker"
+              >
+                {#each ["thunderstore", "index"] as const as option (option)}
+                  <button
+                    type="button"
+                    class="segment"
+                    class:active={selectedSource === option}
+                    aria-pressed={selectedSource === option}
+                    title={trackedSource === option
+                      ? `Installed from ${SOURCE_LABELS[option]}`
+                      : undefined}
+                    disabled={busy}
+                    onclick={() => (chosenSource = option)}
+                  >
+                    {option === "thunderstore" ? "Thunderstore" : "Index"}
+                    {#if trackedSource === option}
+                      <Check size={14} aria-label="installed" />
+                    {/if}
+                  </button>
+                {/each}
+              </div>
+              {#if showSwitch}
+                <button
+                  type="button"
+                  class="btn switch-button"
+                  onclick={switchSource}
+                  disabled={busy}
+                >
+                  Switch
+                </button>
+              {/if}
+            </div>
+          {:else}
+            <span
+              class="chip source-chip"
+              data-testid="source-info"
+              title={sourceInfo.title || undefined}
+            >
+              {sourceInfo.label}
+            </span>
+          {/if}
+        </div>
+        {#if canSwitchSource && isInstalled && trackedSource}
+          <p class="field-hint">
+            {showSwitch
+              ? `Switching replaces the ${SOURCE_LABELS[trackedSource]} install`
+              : `Installed from ${SOURCE_LABELS[trackedSource]}`}
+          </p>
         {/if}
-        {#if mod.title.toLowerCase() === "steamodded" && !$installationStatus[mod.title]}
-          <div class="version-selector">
-            {#if loadingVersions}
-              <div class="loading-text">Loading versions...</div>
-            {:else if steamoddedVersions.length === 0}
-              <div class="loading-text">No versions available</div>
-            {:else}
-              <CustomDropdown
-                options={steamoddedOptions}
-                bind:value={selectedVersion}
-                disabled={$loadingStates[mod.title]}
-                placeholder="Select version"
-              />
-            {/if}
-          </div>
-        {/if}
-        <div class="mod-stats">
-          <span><User size={16} /> {mod.publisher}</span>
+
+        <div class="chips" data-testid="mod-meta">
           {#if mod.thunderstore?.owner && mod.thunderstore.owner !== mod.publisher}
-            <span title="Thunderstore owner">
-              <User size={16} />
+            <span class="chip" title="Thunderstore owner">
+              <User size={14} />
               {mod.thunderstore.owner}
             </span>
           {/if}
+          {#if isInstalled && installedVersion}
+            <span class="chip" title="Installed version">
+              <Package size={14} />
+              {installedVersion}
+            </span>
+          {/if}
           {#if downloadsLabel}
-            <span title="Downloads on Thunderstore">
-              <ArrowDownToLine size={16} />
+            <span class="chip" title="Downloads on Thunderstore">
+              <ArrowDownToLine size={14} />
               {downloadsLabel}
             </span>
           {/if}
-          <LastUpdated value={mod.last_updated} />
+          <LastUpdated value={mod.last_updated} class="chip" iconSize={14} />
+          {#if mod.deprecated}
+            <span class="chip flag deprecated">Deprecated</span>
+          {/if}
+          {#if mod.aiGenerated}
+            <span class="chip flag ai">AI Generated</span>
+          {/if}
+          {#if mod.nsfw}
+            <span class="chip flag nsfw">NSFW</span>
+          {/if}
         </div>
-        {#if mod.deprecated || mod.aiGenerated || mod.nsfw}
-          <div class="flag-badges">
-            {#if mod.deprecated}
-              <span class="flag-badge deprecated">Deprecated</span>
+
+        {#if packageUrl || mod.repo || (mod._dirName && mod.source !== "thunderstore")}
+          <div class="link-row">
+            {#if packageUrl}
+              <button
+                type="button"
+                class="btn link-button"
+                onclick={openThunderstore}
+              >
+                <ExternalLink size={14} /> Thunderstore
+              </button>
             {/if}
-            {#if mod.aiGenerated}
-              <span class="flag-badge ai">AI Generated</span>
-            {/if}
-            {#if mod.nsfw}
-              <span class="flag-badge nsfw">NSFW</span>
+            {#if mod.repo || (mod._dirName && mod.source !== "thunderstore")}
+              <button
+                type="button"
+                class="btn link-button"
+                onclick={handleOpenRepo}
+                disabled={repoLoading}
+              >
+                <Github size={14} /> Repository
+              </button>
             {/if}
           </div>
         {/if}
-        {#if packageUrl}
-          <button onclick={openThunderstore} class="repo-button ts-button">
-            <ExternalLink size={16} /> View on Thunderstore
-          </button>
-        {/if}
-        {#if mod.repo || (mod._dirName && mod.source !== "thunderstore")}
-          <button
-            onclick={handleOpenRepo}
-            class="repo-button"
-            disabled={repoLoading}
-          >
-            <Github size={16} /> Repository
-          </button>
-        {/if}
 
         {#if usesCatalogInstall(mod)}
-          <div class="dependencies-section" data-testid="plan-dependencies">
+          <section class="side-section" data-testid="plan-dependencies">
             <h3>Dependencies</h3>
             {#if planLoading && !plan}
               <p class="dep-empty">Checking dependencies...</p>
@@ -1591,47 +1772,28 @@
                 <p class="dep-warning">{warning}</p>
               {/each}
             {/if}
-          </div>
+          </section>
         {/if}
 
         {#if mod.categories && mod.categories.length > 0}
-          <div class="categories-section">
+          <section class="side-section">
             <h3>Categories</h3>
             <div class="category-tags">
-              {#each mod.categories as category}
+              {#each mod.categories as category (category)}
                 <button
+                  type="button"
                   class="category-tag"
-                  onclick={() => {
-                    currentPage.set(1);
-                    currentModView.set(null);
-                    currentCategory.set(getCategoryName(category));
-                    setTimeout(() => {
-                      const modsContainer = document.querySelector(
-                        ".mods-scroll-container",
-                      );
-                      if (modsContainer) {
-                        modsContainer.scrollTo({
-                          top: 0,
-                          behavior: "smooth",
-                        });
-                      } else {
-                        // Fallback to window scroll
-                        window.scrollTo({
-                          top: 0,
-                          behavior: "smooth",
-                        });
-                      }
-                    }, 50);
-                  }}
+                  onclick={() => openCategory(category)}
                 >
                   {getCategoryName(category)}
                 </button>
               {/each}
             </div>
-          </div>
+          </section>
         {/if}
-      </div>
-      <div class="right-column">
+      </aside>
+
+      <section class="readme-column">
         <div
           class="description"
           role="button"
@@ -1649,124 +1811,432 @@
               <div class="loading-spinner"></div>
               <span>Loading description...</span>
             </div>
-          {:else}
+          {:else if renderedDescription || descriptionText}
             <div
               class="desc-content"
-              transition:fade={{ duration: 300, easing: cubicOut }}
+              in:fade={{ duration: 200, easing: cubicOut }}
             >
               <!-- eslint-disable-next-line svelte/no-at-html-tags -->
               {@html renderedDescription}
             </div>
+          {:else}
+            <p class="desc-empty">No description yet</p>
           {/if}
         </div>
-      </div>
+      </section>
     </div>
   </div>
 </div>
 
 <style>
-  .source-picker {
+  .mod-view-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 900;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1rem;
+    box-sizing: border-box;
+    background: rgba(0, 0, 0, 0.45);
+    backdrop-filter: blur(6px);
+    font-family: "M6X11", sans-serif;
+  }
+
+  .mod-panel {
+    container-type: inline-size;
+    display: flex;
+    flex-direction: column;
+    width: min(920px, 92vw);
+    height: min(680px, 90vh);
+    box-sizing: border-box;
+    background: var(--ui-danger-overlay-stronger, var(--ui-danger-overlay));
+    outline: 2px solid var(--ui-danger-overlay-border-strong);
+    border-radius: 10px;
+    box-shadow: 0 18px 50px rgba(0, 0, 0, 0.45);
+    backdrop-filter: blur(20px);
+    color: var(--ui-text);
+    overflow: hidden;
+  }
+
+  .panel-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 0.9rem 1rem 0.9rem 1.25rem;
+    border-bottom: 1px solid var(--ui-glass-border);
+    flex-shrink: 0;
+  }
+
+  .title-block {
+    display: flex;
+    align-items: baseline;
+    gap: 0.75rem;
+    min-width: 0;
+  }
+
+  h2 {
+    margin: 0;
+    font-size: 1.7rem;
+    line-height: 1.1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .byline {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    font-size: 1rem;
+    opacity: 0.8;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .close-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    height: 36px;
+    flex-shrink: 0;
+    border: none;
+    border-radius: 8px;
+    background: var(--ui-glass);
+    color: var(--ui-text);
+    cursor: pointer;
+    transition: background 0.15s ease;
+  }
+
+  .close-button:hover {
+    background: var(--ui-glass-strong);
+  }
+
+  .panel-body {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    display: grid;
+    grid-template-columns: 300px minmax(0, 1fr);
+    align-items: start;
+    gap: 1.25rem;
+    padding: 1.25rem;
+  }
+
+  @container (max-width: 680px) {
+    .panel-body {
+      grid-template-columns: minmax(0, 1fr);
+    }
+  }
+
+  .side-column {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    min-width: 0;
+  }
+
+  .cover {
+    position: relative;
+    width: 100%;
+    aspect-ratio: 16 / 10;
+    max-height: 190px;
+    border-radius: 8px;
+    overflow: hidden;
+    background: rgba(0, 0, 0, 0.28);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+  }
+
+  /* Letterbox square Thunderstore icons instead of cropping them into a strip */
+  .cover :global(.lazy-image img) {
+    object-fit: contain;
+  }
+
+  .cover.default-cover :global(.lazy-image img) {
+    object-fit: cover;
+  }
+
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.4rem;
+    height: 40px;
+    padding: 0 0.9rem;
+    box-sizing: border-box;
+    border: none;
+    border-radius: 6px;
+    font-family: "M6X11", sans-serif;
+    font-size: 1rem;
+    color: var(--ui-text);
+    cursor: pointer;
+    white-space: nowrap;
+    transition:
+      background 0.15s ease,
+      transform 0.15s ease;
+  }
+
+  .btn :global(svg) {
+    flex-shrink: 0;
+  }
+
+  .btn:hover:not(:disabled) {
+    transform: translateY(-1px);
+  }
+
+  .btn:active:not(:disabled) {
+    transform: translateY(1px);
+  }
+
+  .btn:disabled {
+    cursor: not-allowed;
+    opacity: 0.75;
+  }
+
+  .action-row {
+    display: flex;
+    gap: 0.4rem;
+  }
+
+  .primary {
+    flex: 1;
+    min-width: 0;
+    padding: 0 0.5rem;
+  }
+
+  .download-button {
+    background: var(--ui-success);
+  }
+
+  .download-button:hover:not(:disabled) {
+    background: var(--ui-success-hover);
+  }
+
+  .download-button.installed {
+    background: var(--ui-neutral);
+    opacity: 1;
+    cursor: default;
+  }
+
+  .update-button {
+    background: var(--ui-info);
+  }
+
+  .update-button:hover:not(:disabled) {
+    background: var(--ui-info-hover);
+  }
+
+  .toggle-button {
+    min-width: 52px;
+    padding: 0 0.6rem;
+    background: var(--ui-neutral);
+  }
+
+  .toggle-button:hover:not(:disabled) {
+    background: var(--ui-neutral-hover);
+  }
+
+  .toggle-button.enabled {
+    background: var(--ui-success-strong);
+  }
+
+  .toggle-button.enabled:hover:not(:disabled) {
+    background: var(--ui-success-strong-hover);
+  }
+
+  .icon-button {
+    width: 40px;
+    padding: 0;
+    flex-shrink: 0;
+    background: var(--ui-info-strong);
+  }
+
+  .icon-button:hover:not(:disabled) {
+    background: var(--ui-info-strong-hover);
+  }
+
+  .icon-button.danger {
+    background: var(--ui-danger);
+  }
+
+  .icon-button.danger:hover:not(:disabled) {
+    background: var(--ui-danger-hover);
+  }
+
+  .spinner {
+    border: 2px solid var(--ui-glass-border);
+    border-top: 2px solid var(--ui-text);
+    border-radius: 50%;
+    width: 16px;
+    height: 16px;
+    animation: spin 1s linear infinite;
+  }
+
+  .field {
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+  }
+
+  .field-label {
+    font-size: 0.9rem;
+    opacity: 0.75;
+  }
+
+  .field-control {
     display: flex;
     align-items: center;
     gap: 0.4rem;
-    margin-top: 0.75rem;
-    flex-wrap: wrap;
+    min-width: 0;
   }
 
-  .source-label {
-    font-family: "M6X11", sans-serif;
-    color: var(--ui-text);
+  .version-selector :global(.dropdown) {
+    width: 100%;
+  }
+
+  .version-selector :global(.dropdown-trigger) {
+    height: 36px;
+    padding: 0 0.75rem;
+  }
+
+  .field-note {
+    font-size: 0.95rem;
     opacity: 0.8;
-    margin-right: 0.2rem;
   }
 
-  .source-option {
+  .field-hint {
+    margin: -0.45rem 0 0;
+    font-size: 0.85rem;
+    opacity: 0.7;
+  }
+
+  .segmented {
+    display: inline-flex;
+    flex: 1;
+    min-width: 0;
+    height: 36px;
+    padding: 2px;
+    box-sizing: border-box;
+    border-radius: 7px;
+    background: rgba(0, 0, 0, 0.25);
+    border: 1px solid var(--ui-glass-border);
+  }
+
+  .segment {
+    flex: 1;
     display: inline-flex;
     align-items: center;
-    gap: 0.35rem;
-    background: var(--ui-mod-chip-bg);
-    border: 2px solid var(--ui-mod-chip-border);
-    color: var(--ui-mod-chip-text);
+    justify-content: center;
+    gap: 0.3rem;
+    min-width: 0;
+    padding: 0 0.5rem;
+    border: none;
+    border-radius: 5px;
+    background: transparent;
+    color: var(--ui-text);
     font-family: "M6X11", sans-serif;
     font-size: 0.95rem;
-    padding: 0.35rem 0.7rem;
-    border-radius: 6px;
+    line-height: 1;
     cursor: pointer;
+    transition: background 0.15s ease;
   }
 
-  .source-option.active,
-  .source-option:hover:not(:disabled) {
+  .segment:hover:not(:disabled):not(.active) {
+    background: var(--ui-glass);
+  }
+
+  .segment.active {
     background: var(--ui-mod-chip-active-bg);
     color: var(--ui-mod-chip-active-text);
   }
 
-  .source-current {
-    font-size: 0.7rem;
-    text-transform: uppercase;
-    opacity: 0.8;
-  }
-
-  .switch-source-button {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.4rem;
-    margin-top: 0.6rem;
-    padding: 0.5rem 0.9rem;
-    border: none;
-    border-radius: 6px;
-    background: var(--ui-info);
-    color: var(--ui-text);
-    outline: var(--ui-info-strong) solid 2px;
-    font-family: "M6X11", sans-serif;
-    cursor: pointer;
-  }
-
-  .switch-source-button:disabled {
-    opacity: 0.7;
+  .segment:disabled {
     cursor: not-allowed;
   }
 
-  .flag-badges {
+  .switch-button {
+    height: 36px;
+    padding: 0 0.7rem;
+    font-size: 0.95rem;
+    background: var(--ui-info);
+    flex-shrink: 0;
+  }
+
+  .switch-button:hover:not(:disabled) {
+    background: var(--ui-info-hover);
+  }
+
+  .chips {
     display: flex;
-    gap: 0.4rem;
-    margin-top: 0.6rem;
     flex-wrap: wrap;
+    gap: 0.35rem;
   }
 
-  .flag-badge {
-    font-family: "M6X11", sans-serif;
-    font-size: 0.8rem;
-    padding: 0.25rem 0.5rem;
-    border-radius: 4px;
+  .mod-panel :global(.chip) {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    height: 28px;
+    padding: 0 0.6rem;
+    box-sizing: border-box;
+    border-radius: 999px;
+    background: var(--ui-glass);
+    border: 1px solid var(--ui-glass-border);
+    color: var(--ui-text);
+    font-size: 0.9rem;
+    white-space: nowrap;
+  }
+
+  .source-chip {
+    align-self: flex-start;
+    cursor: default;
+  }
+
+  .chip.flag {
     text-transform: uppercase;
+    font-size: 0.8rem;
+    border-color: rgba(255, 255, 255, 0.25);
     color: #fff;
-    border: 1px solid rgba(255, 255, 255, 0.25);
   }
 
-  .flag-badge.deprecated {
+  .chip.flag.deprecated {
     background: rgba(192, 64, 56, 0.92);
   }
 
-  .flag-badge.ai {
+  .chip.flag.ai {
     background: rgba(121, 110, 158, 0.95);
   }
 
-  .flag-badge.nsfw {
+  .chip.flag.nsfw {
     background: rgba(160, 40, 90, 0.95);
   }
 
-  .ts-button {
-    margin-bottom: 0.5rem;
+  .link-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
   }
 
-  .dependencies-section {
-    margin-top: 1.5rem;
+  .link-button {
+    height: 34px;
+    padding: 0 0.75rem;
+    font-size: 0.95rem;
+    background: var(--ui-code-bg);
+    outline: 1px solid var(--ui-code-outline);
   }
 
-  .dependencies-section h3 {
+  .link-button:hover:not(:disabled) {
+    background: var(--ui-code-bg-hover);
+  }
+
+  .side-section h3 {
+    margin: 0.25rem 0 0.45rem;
+    font-size: 1.1rem;
     color: var(--ui-heading);
-    font-size: 1.5rem;
-    margin-bottom: 0.6rem;
   }
 
   .dep-list {
@@ -1775,7 +2245,7 @@
     padding: 0;
     display: flex;
     flex-direction: column;
-    gap: 0.35rem;
+    gap: 0.3rem;
   }
 
   .dep-list li {
@@ -1783,11 +2253,12 @@
     align-items: center;
     justify-content: space-between;
     gap: 0.5rem;
-    padding: 0.4rem 0.6rem;
+    padding: 0.3rem 0.55rem;
     border-radius: 6px;
     background: var(--ui-mod-chip-bg);
     border: 1px solid var(--ui-mod-chip-border);
     color: var(--ui-mod-chip-text);
+    font-size: 0.95rem;
   }
 
   .dep-name {
@@ -1798,7 +2269,6 @@
   }
 
   .dep-state {
-    font-family: "M6X11", sans-serif;
     font-size: 0.85rem;
     flex-shrink: 0;
   }
@@ -1813,9 +2283,9 @@
 
   .dep-empty,
   .dep-warning {
-    color: var(--ui-text);
+    margin: 0.3rem 0 0;
+    font-size: 0.95rem;
     opacity: 0.8;
-    margin: 0.4rem 0 0;
   }
 
   .dep-warning {
@@ -1823,306 +2293,62 @@
     opacity: 1;
   }
 
-  :global(.description img) {
-    max-width: 100%;
-    max-height: 300px;
-    width: auto;
-    height: auto;
-    object-fit: contain;
-    display: block;
-    -webkit-user-drag: none;
-    user-select: none;
-    -webkit-user-select: none;
-    pointer-events: none;
-  }
-
-  .toggle-button {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 0.5rem;
-    padding: 1rem;
-    border: none;
-    border-radius: 6px;
-    font-size: 1rem;
-    cursor: pointer;
-    transition: all 0.2s ease;
-    font-family: "M6X11", sans-serif;
-    min-height: 48px;
-  }
-
-  .toggle-button.enabled {
-    background: var(--ui-success-strong); /* Bright green when enabled */
-    color: var(--ui-text);
-  }
-
-  .toggle-button.disabled {
-    background: var(--ui-neutral); /* Gray when disabled */
-    color: var(--ui-text);
-  }
-
-  .toggle-button:hover.enabled {
-    background: var(--ui-success-strong-hover); /* Lighter green on hover */
-    transform: translateY(-2px);
-  }
-
-  .toggle-button:hover.disabled {
-    background: var(--ui-neutral-hover); /* Lighter gray on hover */
-    transform: translateY(-2px);
-  }
-
-  .toggle-button:active {
-    transform: translateY(1px);
-  }
-
-  .collection-button {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 0.5rem;
-    padding: 1rem;
-    border: none;
-    border-radius: 6px;
-    font-size: 1rem;
-    cursor: pointer;
-    transition: all 0.2s ease;
-    font-family: "M6X11", sans-serif;
-    min-height: 48px;
-    background: var(--ui-info-strong);
-    color: var(--ui-text);
-  }
-
-  .collection-button:hover {
-    background: var(--ui-info-strong-hover);
-    transform: translateY(-2px);
-  }
-
-  .collection-button:active {
-    transform: translateY(1px);
-  }
-
-  .categories-section {
-    margin-top: 1.5rem;
-    padding: 0.75rem;
-    background: var(--ui-glass-weak);
-    border-radius: 6px;
-  }
-
-  .categories-section h3 {
-    margin: 0 0 0.7rem 0;
-    font-size: 1.2rem;
-    color: var(--ui-text);
-    text-align: center;
-  }
-
   .category-tags {
     display: flex;
     flex-wrap: wrap;
-    gap: 0.6rem; /* Increased gap between tags */
-    width: 100%;
-    justify-content: center;
+    gap: 0.35rem;
   }
 
   .category-tag {
-    background: var(--ui-glass); /* Transparent background */
-    color: var(--ui-text);
-    border: 1px solid var(--ui-glass-border); /* Subtle border */
+    height: 30px;
+    padding: 0 0.7rem;
     border-radius: 6px;
-    padding: 0.5rem 1rem; /* Larger padding for bigger tags */
-    font-size: 1.1rem; /* Larger font size */
-    cursor: pointer;
-    transition: all 0.2s ease;
+    background: var(--ui-glass);
+    border: 1px solid var(--ui-glass-border);
+    color: var(--ui-text);
     font-family: "M6X11", sans-serif;
-    backdrop-filter: blur(8px); /* Add blur effect */
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+    font-size: 0.95rem;
+    cursor: pointer;
+    transition:
+      background 0.15s ease,
+      transform 0.15s ease;
   }
 
   .category-tag:hover {
-    background: var(--ui-glass-strong); /* Slightly more visible on hover */
-    transform: translateY(-2px);
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    background: var(--ui-glass-strong);
+    transform: translateY(-1px);
   }
 
-  .category-tag:active {
-    transform: translateY(1px);
-    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.1);
+  .readme-column {
+    min-width: 0;
   }
 
-  .mod-view {
-    position: fixed;
-    top: 0;
-    right: 0;
-    width: 100%;
-    height: 100%;
-    /* background: linear-gradient(to bottom, #393646, #4a4458); */
-    background: var(--ui-danger-overlay);
-    backdrop-filter: blur(20px);
-    z-index: 1000;
-    overflow-y: auto;
-    font-family: "M6X11", sans-serif;
-  }
-
-  .mod-content {
-    position: relative;
-
-    /* max-width: 1000px; */
-    padding: 3rem;
+  .description {
+    font-size: 1.15rem;
+    line-height: 1.5;
     color: var(--ui-text);
-    font-family: "M6X11", sans-serif;
-  }
-
-  .image-button {
-    padding: 0;
-    margin: 0;
-    border: none;
-    background: none;
-    cursor: default; /* do not show pointer over thumbnail */
-    width: 100%;
-    height: 100%;
-    display: block;
-    line-height: 0; /* remove any spacing */
-    font-size: 0; /* remove any spacing */
-  }
-
-  h2 {
-    margin-bottom: 2rem;
-    font-size: 1.8rem;
-  }
-
-  .content-grid {
-    display: grid;
-    grid-template-columns: 350px 1fr;
-    gap: 3rem;
-  }
-
-  .image-container {
+    background: var(--ui-glass-weak);
+    padding: 1rem 1.25rem;
     border-radius: 8px;
-    height: 250px;
-    overflow: hidden;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+    min-height: 12rem;
+    overflow-wrap: anywhere;
   }
 
-  /* Image display is managed by LazyImage; keep container-only styles */
-  .image-container {
-    cursor: default;
+  .description:focus {
+    outline: none;
   }
 
-  /* Subtle zoom-in on hover for thumbnail (style child component via :global) */
-  .image-container :global(.lazy-image img) {
-    transition: transform 180ms ease-out;
-    will-change: transform;
-  }
-  .image-container:hover :global(.lazy-image img) {
-    transform: scale(1.04);
+  .description:focus-visible {
+    outline: 2px solid var(--ui-focus-ring);
   }
 
-  .button-container {
-    display: flex;
-    gap: 0.5rem;
-    margin: 1rem 0;
+  .desc-content > :global(:first-child) {
+    margin-top: 0;
   }
 
-  .download-button,
-  .update-button {
-    flex: 1;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 0.5rem;
-    padding: 1rem;
-    border: none;
-    border-radius: 6px;
-    font-size: 1rem;
-    cursor: pointer;
-    transition: all 0.2s ease;
-    font-family: "M6X11", sans-serif;
-    /* Fixed height to prevent resizing */
-    min-height: 48px;
-  }
-
-  .download-button {
-    background: var(--ui-success);
-    color: var(--ui-text);
-  }
-
-  .update-button {
-    background: var(--ui-info); /* Bright blue color */
-    color: var(--ui-text);
-  }
-
-  .update-button:hover:not(:disabled) {
-    background: var(--ui-info-hover); /* Lighter blue on hover */
-    transform: translateY(-2px);
-  }
-
-  .update-button:active:not(:disabled) {
-    transform: translateY(1px);
-  }
-
-  .spinner {
-    border: 2px solid var(--ui-glass-border);
-    border-top: 2px solid var(--ui-text);
-    border-radius: 50%;
-    width: 16px;
-    height: 16px;
-    animation: spin 1s linear infinite;
-  }
-
-  @keyframes spin {
-    0% {
-      transform: rotate(0deg);
-    }
-    100% {
-      transform: rotate(360deg);
-    }
-  }
-
-  .download-button:hover:not(.installed) {
-    background: var(--ui-success-hover);
-    transform: translateY(-2px);
-  }
-
-  .download-button.installed {
-    background: var(--ui-neutral);
-    cursor: not-allowed;
-  }
-
-  .download-button:active:not(.installed) {
-    transform: translateY(1px);
-  }
-
-  .delete-button {
-    padding: 0.75rem;
-    background: var(--ui-danger);
-    color: var(--ui-text);
-    border: none;
-    border-radius: 6px;
-    cursor: pointer;
-    transition: all 0.2s ease;
-  }
-
-  .delete-button:hover {
-    background: var(--ui-danger-hover);
-    transform: translateY(-2px);
-  }
-
-  .mod-stats {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 1rem;
-    font-size: 1.1rem;
-    padding: 1rem;
-    background: var(--ui-glass);
-    border-radius: 6px;
-    justify-content: center;
-    align-items: center;
-  }
-
-  .mod-stats :global(span) {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    color: var(--ui-text);
+  .desc-empty {
+    margin: 0;
+    opacity: 0.7;
   }
 
   :global(.description img) {
@@ -2138,18 +2364,6 @@
     pointer-events: none;
   }
 
-  .description {
-    font-size: 1.2rem;
-    line-height: 1;
-    color: var(--ui-text);
-    background: var(--ui-glass-weak);
-    padding: 1.25rem;
-    border-radius: 6px;
-    width: 50rem;
-    line-height: 1.5;
-  }
-
-  /* Improved inline code styling */
   .description :global(code) {
     background: var(--ui-panel-muted);
     color: var(--ui-text);
@@ -2159,7 +2373,6 @@
     font-size: 0.75em;
   }
 
-  /* Improved code block styling */
   .description :global(pre) {
     background: var(--ui-panel-muted-strong);
     padding: 1em;
@@ -2169,7 +2382,6 @@
     border: 1px solid var(--ui-panel-muted-border);
   }
 
-  /* Style code within pre blocks differently than inline code */
   .description :global(pre code) {
     background: transparent;
     padding: 0;
@@ -2179,7 +2391,19 @@
     white-space: pre;
   }
 
-  /* Add syntax highlighting colors */
+  .description :global(table) {
+    display: block;
+    max-width: 100%;
+    overflow-x: auto;
+    border-collapse: collapse;
+  }
+
+  .description :global(th),
+  .description :global(td) {
+    border: 1px solid var(--ui-glass-border);
+    padding: 0.3em 0.6em;
+  }
+
   .description :global(.token.keyword),
   .description :global(.token.operator) {
     color: #ff7b72;
@@ -2209,81 +2433,43 @@
     color: #79c0ff;
   }
 
-  .header-container {
-    position: absolute;
-    top: 0;
-    left: 0;
-    height: 100%;
-    width: 100%;
-
-    z-index: 999;
-
-    pointer-events: none;
-  }
-
-  .back-button {
-    position: relative;
-    /* top: 1rem;
-		left: 1rem; */
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    background: var(--ui-glass);
-    border: none;
-    color: var(--ui-text);
-    padding: 0.5rem 1rem;
-    border-radius: 6px;
-    cursor: pointer;
-    transition: all 0.2s ease;
-    font-family: "M6X11", sans-serif;
-    font-size: 1rem;
-    z-index: 100;
-
-    pointer-events: auto;
-
-    backdrop-filter: blur(20px) brightness(0.7);
-  }
-
-  .back-button:hover {
-    background: var(--ui-glass-strong);
-    transform: translateX(-5px);
-  }
-
-  .header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-
-    box-sizing: border-box;
-    position: sticky;
-
-    top: 1rem;
-    width: 100%;
-    height: 2.5rem;
-
-    padding: 0 1rem;
-  }
-
   .description :global(h1),
   .description :global(h2),
   .description :global(h3),
   .description :global(h4) {
-    margin-bottom: 0.5em;
+    margin: 0.6em 0 0.4em;
     color: var(--ui-text);
+    line-height: 1.2;
+  }
+
+  .description :global(h1) {
+    font-size: 1.6em;
+  }
+
+  .description :global(h2) {
+    font-size: 1.35em;
+  }
+
+  .description :global(h3) {
+    font-size: 1.15em;
+  }
+
+  .description :global(h4) {
+    font-size: 1em;
   }
 
   .description :global(p) {
-    margin-bottom: 1em;
+    margin: 0 0 0.9em;
   }
 
   .description :global(ul),
   .description :global(ol) {
-    margin-left: 1.5em;
-    margin-bottom: 1em;
+    margin: 0 0 0.9em 1.5em;
+    padding: 0;
   }
 
   .description :global(li) {
-    margin-bottom: 0.5em;
+    margin-bottom: 0.4em;
   }
 
   .description :global(a) {
@@ -2291,24 +2477,21 @@
     text-decoration: none;
     cursor: pointer;
     pointer-events: auto;
+    transition: all 0.2s ease;
+    -webkit-user-drag: none;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+
+  .description :global(a:hover) {
+    text-decoration: underline;
+    filter: brightness(1.2);
+    z-index: 10;
   }
 
   .description :global(a.internal-mod-link) {
-    /* Use Balatro's gold color for internal mod links */
     color: var(--ui-accent) !important;
     position: relative;
-  }
-
-  .description :global(a.internal-mod-link::after) {
-    display: inline-block;
-    margin-left: 3px;
-    transform: rotate(-45deg);
-    font-weight: bold;
-  }
-
-  .description :global(a.internal-mod-link:hover) {
-    text-decoration: underline;
-    filter: brightness(1.2);
   }
 
   .description :global(a.internal-mod-link:hover::before) {
@@ -2325,11 +2508,6 @@
     z-index: 10;
   }
 
-  .description :global(a:hover) {
-    text-decoration: underline;
-    z-index: 10;
-  }
-
   .description :global(blockquote) {
     border-left: 3px solid var(--ui-success);
     margin: 1em 0;
@@ -2337,150 +2515,21 @@
     color: var(--ui-text-soft);
   }
 
-  .description :global(a) {
-    -webkit-user-drag: none;
-    user-select: none;
-    -moz-user-select: none;
-    -webkit-user-select: none;
-    -ms-user-select: none;
-  }
-
-  .delete-button:active {
-    transform: translateY(1px);
-  }
-  /* Image elements live inside LazyImage, so no direct img rules here */
-
-  /* .image-container .clickable { */
-  /* 	cursor: pointer; */
-  /* } */
-
-  @media (max-width: 1360px) {
-    .content-grid {
-      grid-template-columns: 1fr;
-    }
-    .image-container {
-      width: 100%;
-      height: 350px;
-    }
-
-    .image-button {
-      height: 100%;
-    }
-
-    .right-column {
-      bottom: 2rem;
-      position: relative;
-    }
-
-    .mod-content {
-      width: 100%;
-      max-width: 100%;
-      box-sizing: border-box;
-    }
-
-    .right-column {
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-    }
-  }
-
-  .download-button:disabled,
-  .update-button:disabled {
-    opacity: 0.8;
-    cursor: not-allowed;
-  }
-
-  .version-selector {
-    margin-bottom: 1rem;
-    width: 100%;
-  }
-
-  .loading-text {
-    /* width: 100%; */
-    padding: 0.75rem;
-    background: var(--ui-danger-overlay);
-    color: var(--ui-text);
-    border: 1px solid var(--ui-danger-overlay-border);
-    border-radius: 6px;
-    font-family: "M6X11", sans-serif;
-    font-size: 1rem;
-    text-align: center;
-  }
-
-  .repo-button {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    width: 100%;
-    height: 3rem;
-    padding: 0.75rem 1.5rem;
-    background: var(--ui-code-bg);
-    color: var(--ui-text);
-    border: none;
-    outline: var(--ui-code-outline) solid 2px;
-    border-radius: 4px;
-    font-family: "M6X11", sans-serif;
-    font-size: 1rem;
-    cursor: pointer;
-    transition: all 0.2s ease;
-    text-decoration: none;
-    margin-top: 1rem;
-    justify-content: center;
-  }
-
-  .repo-button:hover {
-    background: var(--ui-code-bg-hover);
-    transform: translateY(-2px);
-  }
-
-  .description :global(a) {
-    color: var(--ui-success);
-    text-decoration: none;
-    cursor: pointer;
-    transition: all 0.2s ease;
-  }
-
-  .description :global(a:hover) {
-    text-decoration: underline;
-    filter: brightness(1.2);
-  }
-
-  :global([data-platform="linux"]) .category-tag {
-    backdrop-filter: none;
-    background: var(--ui-glass);
-  }
-
-  :global([data-platform="linux"]) .mod-view {
-    backdrop-filter: none;
-    background: var(--ui-danger-overlay-strong);
-    position: absolute;
-    inset: 0;
-    border-radius: 6px;
-    max-height: 100%;
-    overflow-y: auto;
-  }
-
-  :global([data-platform="linux"]) .back-button {
-    backdrop-filter: none;
-    background: var(--ui-glass);
-  }
-
   .desc-loading-full {
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    gap: 1.5rem;
-    padding: 4rem 1rem;
+    gap: 1.25rem;
+    padding: 3rem 1rem;
     color: var(--ui-text-soft);
-    font-size: 1.5rem;
+    font-size: 1.3rem;
   }
 
   .desc-loading-full .loading-spinner {
-    width: 48px;
-    height: 48px;
-    border: 6px solid var(--ui-text-soft);
+    width: 40px;
+    height: 40px;
+    border: 5px solid var(--ui-text-soft);
     border-top-color: transparent;
     border-radius: 50%;
     animation: spin 0.8s linear infinite;
@@ -2513,5 +2562,15 @@
     to {
       transform: rotate(360deg);
     }
+  }
+
+  :global([data-platform="linux"]) .mod-view-backdrop {
+    backdrop-filter: none;
+    background: rgba(0, 0, 0, 0.6);
+  }
+
+  :global([data-platform="linux"]) .mod-panel {
+    backdrop-filter: none;
+    background: var(--ui-danger-overlay-strong);
   }
 </style>
