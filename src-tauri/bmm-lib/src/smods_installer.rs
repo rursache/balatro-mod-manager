@@ -26,7 +26,7 @@ use reqwest::header::{HeaderMap, HeaderValue, USER_AGENT};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::Cursor;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tokio::fs as tokio_fs;
 use tokio::time::sleep;
 use zip::ZipArchive;
@@ -81,6 +81,50 @@ impl ModType {
             }
         }
     }
+}
+
+/// True when `path` is a directory that holds a Steamodded install, judged by
+/// its own files (manifest name or the smods source layout), never by folder name
+pub fn is_steamodded_install(path: &Path) -> bool {
+    if !path.is_dir() {
+        return false;
+    }
+
+    if let Ok(raw) = fs::read_to_string(path.join("manifest.json"))
+        && let Ok(manifest) = serde_json::from_str::<serde_json::Value>(&raw)
+        && manifest
+            .get("name")
+            .and_then(|n| n.as_str())
+            .is_some_and(|n| n.eq_ignore_ascii_case("steamodded"))
+    {
+        return true;
+    }
+
+    let has_core =
+        path.join("src").join("core.lua").is_file() || path.join("core").join("core.lua").is_file();
+    has_core && path.join("version.lua").is_file() && path.join("lovely").is_dir()
+}
+
+fn has_steamodded_dir_name(name: &str) -> bool {
+    let lower = name.to_lowercase();
+    lower.starts_with("smods") || lower.starts_with("steamodded")
+}
+
+/// Lists folders directly inside `mods_dir` that are named like Steamodded
+/// (`smods*`, `Steamodded*`) and contain a Steamodded install
+pub fn find_steamodded_dirs(mods_dir: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = fs::read_dir(mods_dir) else {
+        return Vec::new();
+    };
+    let mut found: Vec<PathBuf> = entries
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
+        .filter(|e| e.file_name().to_str().is_some_and(has_steamodded_dir_name))
+        .map(|e| e.path())
+        .filter(|p| is_steamodded_install(p))
+        .collect();
+    found.sort();
+    found
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -456,5 +500,71 @@ mod tests {
 
         let talisman = ModInstaller::new(ModType::Talisman);
         assert!(matches!(talisman.mod_type, ModType::Talisman));
+    }
+
+    fn write(path: &Path, contents: &str) {
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, contents).unwrap();
+    }
+
+    #[test]
+    fn is_steamodded_install_checks_files_not_names() {
+        let td = tempfile::tempdir().unwrap();
+
+        let by_manifest = td.path().join("anything");
+        write(
+            &by_manifest.join("manifest.json"),
+            r#"{"name": "Steamodded", "version_number": "1.0.0"}"#,
+        );
+        assert!(is_steamodded_install(&by_manifest));
+
+        let by_layout = td.path().join("smods-main");
+        write(&by_layout.join("src").join("core.lua"), "");
+        write(&by_layout.join("version.lua"), "return \"1.0.0\"");
+        fs::create_dir_all(by_layout.join("lovely")).unwrap();
+        assert!(is_steamodded_install(&by_layout));
+
+        let other_manifest = td.path().join("Steamodded-addon");
+        write(
+            &other_manifest.join("manifest.json"),
+            r#"{"name": "Cryptid"}"#,
+        );
+        assert!(!is_steamodded_install(&other_manifest));
+
+        let empty = td.path().join("Steamodded");
+        fs::create_dir_all(&empty).unwrap();
+        assert!(!is_steamodded_install(&empty));
+    }
+
+    #[test]
+    fn find_steamodded_dirs_detects_leftover_smods_folders() {
+        let td = tempfile::tempdir().unwrap();
+        let mods = td.path();
+        let manifest = r#"{"name": "Steamodded"}"#;
+        for name in [
+            "smods-1.0.0-beta-1814a",
+            "Steamodded",
+            "Steamodded-smods-abc",
+        ] {
+            write(&mods.join(name).join("manifest.json"), manifest);
+        }
+        // Steamodded files under an unrelated name are not a leftover copy
+        write(&mods.join("MyFork").join("manifest.json"), manifest);
+        // Steamodded like name without Steamodded files
+        fs::create_dir_all(mods.join("smods-backup-notes")).unwrap();
+        write(&mods.join("smods-file.zip"), "");
+
+        let found: Vec<String> = find_steamodded_dirs(mods)
+            .iter()
+            .map(|p| p.file_name().unwrap().to_string_lossy().to_string())
+            .collect();
+        assert_eq!(
+            found,
+            vec![
+                "Steamodded",
+                "Steamodded-smods-abc",
+                "smods-1.0.0-beta-1814a"
+            ]
+        );
     }
 }
