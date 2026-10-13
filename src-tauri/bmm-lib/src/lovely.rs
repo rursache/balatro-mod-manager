@@ -85,6 +85,14 @@ fn load_persisted_version_cache() -> Option<String> {
         .ok()?
         .as_secs();
 
+    if parse_lovely_version(&cached.version).is_none() {
+        log::warn!(
+            "Ignoring invalid cached Lovely version {:?}",
+            cached.version
+        );
+        return None;
+    }
+
     if now.saturating_sub(cached.fetched_at_unix) < VERSION_CACHE_TTL_SECS {
         log::debug!("Loaded Lovely version from disk cache: {}", cached.version);
         Some(cached.version)
@@ -139,6 +147,18 @@ pub fn supports_vanilla_flag(version: Option<&str>) -> bool {
     version
         .and_then(parse_lovely_version)
         .is_some_and(|v| v >= (0, 9, 0))
+}
+
+/// Extracts the version from the `/releases/latest` redirect, e.g. ".../tag/v0.10.0" -> "0.10.0"
+fn version_from_latest_redirect(is_redirect: bool, location: &str) -> Option<String> {
+    if !is_redirect {
+        return None;
+    }
+    let (_, tag) = location.rsplit_once("/tag/")?;
+    let tag = tag.split(['?', '#', '/']).next()?.trim();
+    let version = tag.strip_prefix(['v', 'V']).unwrap_or(tag);
+    parse_lovely_version(version)?;
+    Some(version.to_string())
 }
 
 /// Download URL for a Lovely release asset, pinned to `version` when it is known
@@ -914,7 +934,9 @@ pub async fn get_latest_lovely_version() -> Result<String, AppError> {
             AppError::Network(e.to_string())
         })?;
 
-    // GitHub returns a 3xx with a Location header to /tag/vX.Y.Z
+    // GitHub answers with a 3xx whose Location points at /tag/vX.Y.Z. Anything else
+    // (rate limit, 5xx, proxy page) must not be cached as a version
+    let status = resp.status();
     let location = resp
         .headers()
         .get(reqwest::header::LOCATION)
@@ -922,27 +944,16 @@ pub async fn get_latest_lovely_version() -> Result<String, AppError> {
         .unwrap_or_default()
         .to_string();
 
-    // Fallback: if redirect policy changed or header empty, try final URL string
-    let url_str = if location.is_empty() {
-        resp.url().as_str().to_string()
-    } else {
-        location
-    };
-
-    // Extract the tag part after "/tag/" and strip leading 'v'
-    let version = url_str
-        .split('/')
-        .next_back()
-        .unwrap_or("")
-        .trim_start_matches('v')
-        .to_string();
-
-    if version.is_empty() {
-        log::error!("Failed to parse Lovely version from URL: {}", url_str);
+    let Some(version) = version_from_latest_redirect(status.is_redirection(), &location) else {
+        log::error!(
+            "Unexpected Lovely latest release response: HTTP {} location {:?}",
+            status,
+            location
+        );
         return Err(AppError::InvalidState(
             "Failed to resolve latest Lovely version tag".to_string(),
         ));
-    }
+    };
 
     // Update in-memory cache
     {
@@ -1405,6 +1416,39 @@ mod tests {
         assert!(supports_vanilla_flag(Some("1.0.0")));
         assert!(!supports_vanilla_flag(Some("garbage")));
         assert!(!supports_vanilla_flag(None));
+    }
+
+    #[test]
+    fn version_from_latest_redirect_requires_tag_redirect() {
+        let tag = "https://github.com/ethangreen-dev/lovely-injector/releases/tag/v0.10.0";
+        assert_eq!(
+            version_from_latest_redirect(true, tag),
+            Some("0.10.0".to_string())
+        );
+        assert_eq!(
+            version_from_latest_redirect(
+                true,
+                "/ethangreen-dev/lovely-injector/releases/tag/0.9.1?x=1"
+            ),
+            Some("0.9.1".to_string())
+        );
+        assert_eq!(version_from_latest_redirect(false, tag), None);
+        assert_eq!(version_from_latest_redirect(true, ""), None);
+        assert_eq!(
+            version_from_latest_redirect(
+                true,
+                "https://github.com/ethangreen-dev/lovely-injector/releases/latest"
+            ),
+            None
+        );
+        assert_eq!(
+            version_from_latest_redirect(true, "http://portal.example/login.html"),
+            None
+        );
+        assert_eq!(
+            version_from_latest_redirect(true, "https://github.com/x/releases/tag/latest"),
+            None
+        );
     }
 
     #[test]
