@@ -3062,7 +3062,7 @@
         </div>
       {/if}
     {:else if $currentCategory === "Collections"}
-      <div class="mods-wrapper">
+      <div class="mods-wrapper collections-layout">
         <div class="collections-shell">
           <div class="collections-left default-scrollbar">
             <div class="collections-create">
@@ -3216,7 +3216,10 @@
         </div>
       </div>
     {:else}
-      <div class="mods-wrapper">
+      <div
+        class="mods-wrapper"
+        class:installed-layout={$currentCategory === "Installed Mods"}
+      >
         {#if $modsStore.length === 0 && !isLoading && !$catalogLoading && !catalogRetryPending && $currentCategory !== "Installed Mods"}
           <div class="no-mods-message">
             <p>No catalog mods loaded.</p>
@@ -4762,6 +4765,101 @@
 
   .check-icon {
     flex-shrink: 0;
+  }
+
+  /* Collections lines up with the Installed Mods column edges */
+  .mods-wrapper.collections-layout {
+    padding: 0;
+    margin: 0 -0.5rem;
+  }
+
+  .collections-layout .collections-left {
+    padding-left: calc(10px + 0.5rem);
+  }
+
+  .collections-layout .collections-right {
+    padding-right: 0.5rem;
+    scrollbar-gutter: stable;
+  }
+
+  .collections-layout .collections-mods-grid {
+    padding: 0 0 0 0.5rem;
+  }
+
+  /* Cards fill their column, at their fixed width neighbours overlapped */
+  .collections-mods-grid :global(.mod-card) {
+    width: 100%;
+    max-width: none;
+  }
+
+  /* Installed Mods is full width: the toolbar, section bars and grid share one
+     column whose edges match the scroll content, with a scrollbar gutter on both
+     sides so the column stays centered */
+  .mods-wrapper.installed-layout {
+    /* Scrollbar width plus the space between it and the cards */
+    --installed-gutter: 10px;
+    --installed-inset: 0.5rem;
+    padding: 0;
+    margin: 0 calc(var(--installed-inset) * -1);
+  }
+
+  .installed-layout .controls-container {
+    position: relative;
+    width: auto;
+    height: auto;
+    margin: 0;
+    padding: 1rem calc(var(--installed-gutter) + var(--installed-inset)) 0.75rem;
+    gap: 0.75rem;
+  }
+
+  .installed-layout .controls-left {
+    gap: 0.6rem;
+  }
+
+  .installed-layout .folder-icon-button,
+  .installed-layout .update-all-button-top {
+    position: static;
+    transform: none;
+  }
+
+  .installed-layout .update-all-button-top:active {
+    transform: translateY(1px);
+  }
+
+  .installed-layout .sort-controls {
+    position: static;
+    margin-left: auto;
+  }
+
+  .installed-layout .mods-scroll-container.installed-view {
+    padding: 0 var(--installed-inset);
+    scrollbar-gutter: stable both-edges;
+  }
+
+  .installed-layout .section-divider {
+    margin: 0.75rem 0 0.5rem;
+    padding: 0.5rem 1rem;
+  }
+
+  .installed-layout .section-divider .section-count {
+    right: 1rem;
+  }
+
+  .installed-layout .subsection-divider {
+    margin: 0.75rem 0 0.5rem;
+    padding: 0.5rem 1rem;
+  }
+
+  .installed-layout .mods-grid {
+    padding-left: 0;
+    padding-right: 0;
+  }
+
+  /* Same min card width as All Mods, the grid adds columns instead of growing
+     cards, and each card fills its column so the grid edges meet the bars */
+  .installed-layout .mods-grid :global(.mod-card) {
+    width: 100%;
+    max-width: none;
   }
 
   .check-placeholder {

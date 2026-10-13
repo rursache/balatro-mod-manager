@@ -946,7 +946,11 @@
     min-width: 0;
     height: 100%;
     overflow-y: auto;
-    padding: 1.5rem 1rem 2.5rem 0.5rem;
+    /* Same column edges as Installed Mods: a scrollbar gutter on both sides and
+       a small inset, pulled out by that inset */
+    scrollbar-gutter: stable both-edges;
+    margin: 0 -0.5rem;
+    padding: 1.5rem 0.5rem 2.5rem;
     box-sizing: border-box;
     color: var(--ui-text);
     font-family: "M6X11", sans-serif;
