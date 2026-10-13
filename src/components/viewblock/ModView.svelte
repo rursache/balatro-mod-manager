@@ -1204,6 +1204,7 @@
                 fallbackSrc={mod.imageFallback}
                 alt={mod.title}
                 cacheTitle={mod.title}
+                remoteSrc={mod.thumbnailUrl}
                 hasThumbnail={mod._hasThumbnail !== false}
               />
             </button>
@@ -1213,6 +1214,7 @@
               fallbackSrc={mod.imageFallback}
               alt={mod.title}
               cacheTitle={mod.title}
+              remoteSrc={mod.thumbnailUrl}
               hasThumbnail={mod._hasThumbnail !== false}
             />
           {/if}

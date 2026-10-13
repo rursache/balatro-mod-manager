@@ -55,19 +55,6 @@ export const RESIZE_DEBOUNCE_MS = 50;
 export const LOADING_DOTS_INTERVAL_MS = 500;
 
 // =============================================================================
-// Thumbnail Loading
-// =============================================================================
-
-/** Initial delay for thumbnail refresh polling (ms) */
-export const THUMB_REFRESH_INITIAL_DELAY_MS = 1500;
-
-/** Delay for thumbnail refresh when attempts <= 4 (ms) */
-export const THUMB_REFRESH_FAST_DELAY_MS = 2000;
-
-/** Delay for thumbnail refresh when attempts > 4 (ms) */
-export const THUMB_REFRESH_SLOW_DELAY_MS = 5000;
-
-// =============================================================================
 // Image Loading (LazyImage)
 // =============================================================================
 

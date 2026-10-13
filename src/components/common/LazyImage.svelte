@@ -7,7 +7,12 @@
     acquireLoadSlot,
     setMaxConcurrentLoads,
     observeIntersection,
+    findScrollRoot,
   } from "../../utils/image-loader-shared";
+  import {
+    requestThumbnail,
+    type ThumbnailRequest,
+  } from "../../utils/thumbnailRequests";
 
   export let src: string;
   export let alt: string = "";
@@ -15,11 +20,14 @@
   export let defaultSrc: string = "/images/cover.jpg";
   export let className: string = "";
   // Optional caching by title: when provided, we try to use a cached
-  // thumbnail and persist successful remote loads for future sessions.
+  // thumbnail and download `remoteSrc` into the cache once in view
   export let cacheTitle: string | void;
+  export let remoteSrc: string | void = undefined;
   export let enableCache: boolean = true;
   export let deferLoad: boolean = false;
   export let hasThumbnail: boolean = true;
+  // How far outside the scroll container an image starts loading
+  export let rootMargin: string | void = undefined;
 
   // Emit load/error for parent if needed
   const dispatch = createEventDispatcher();
@@ -55,17 +63,20 @@
   let showSpinnerOverlay = false;
   // When we decide to show default for a given src, remember it so we don't retry
   let lockDefaultFor: string | null = null;
-  // Avoid duplicate cache writes in a single session (per instance, fine).
-  const seenCacheTitles = new Set<string>();
-  // One-shot cache recheck timer to update image after background caching
-  let cacheRecheckTimer: number | null = null;
-  const CACHE_RECHECK_DELAY_MS = 6000;
   // Shared intersection observer pool handles offscreen loading.
   let unobserve: (() => void) | null = null;
   let inView = false;
   let localFileFallback: string | null = null;
   let triedLocalFileFallback = false;
   let loadGeneration = 0;
+  let destroyed = false;
+  // Cached thumbnail found or downloaded for cacheTitle, wins over `src`
+  let resolvedOverride: string | null = null;
+  let overrideTitle: string | void = cacheTitle;
+  let remoteRequest: ThumbnailRequest | null = null;
+  let fetchingRemote = false;
+  // cacheTitle|remoteSrc pair already tried while in view, avoids refetching on every scroll
+  let attemptedKey: string | null = null;
 
   function releaseSlot() {
     if (releaseCurrent) {
@@ -243,12 +254,9 @@
   }
 
   async function startLoading() {
-    if (deferLoad) {
-      ensureObserved();
-      return;
-    }
-    if (!inView) {
+    if (deferLoad || !inView) {
       // Defer until the image is within (or near) the viewport
+      attemptedKey = null;
       ensureObserved();
       return;
     }
@@ -331,40 +339,6 @@
     localFileFallback = null;
     triedLocalFileFallback = false;
     releaseSlot();
-    // Schedule a one-shot cache recheck: background queue may fetch it soon
-    if (
-      enableCache &&
-      cacheTitle &&
-      cacheRecheckTimer === null &&
-      !thumbMemo.has(cacheTitle)
-    ) {
-      cacheRecheckTimer = setTimeout(async () => {
-        cacheRecheckTimer = null;
-        try {
-          const cached = await invoke<string | null>(
-            "get_cached_thumbnail_by_title",
-            { title: cacheTitle },
-          );
-          if (cached) {
-            const resolved = resolveLocal(cached);
-            if (!resolved) {
-              resetToDefault();
-              return;
-            }
-            currentSrc = resolved;
-            usingDefault = false;
-            loading = false;
-            loaded = true;
-            showSpinner = false;
-            localFileFallback = resolved;
-            triedLocalFileFallback = false;
-            dispatch("load");
-          }
-        } catch (_) {
-          /* ignore */
-        }
-      }, CACHE_RECHECK_DELAY_MS) as unknown as number;
-    }
   }
 
   function handleLoad(event: Event) {
@@ -381,22 +355,6 @@
     showSpinner = false;
     releaseSlot();
     dispatch("load");
-
-    // If a remote image loaded successfully, persist it to the cache for future use
-    if (
-      enableCache &&
-      cacheTitle &&
-      currentSrc &&
-      /^https?:\/\//i.test(currentSrc) &&
-      !seenCacheTitles.has(cacheTitle)
-    ) {
-      seenCacheTitles.add(cacheTitle);
-      // Non-blocking; backend will no-op if already cached
-      invoke("cache_thumbnail_from_url", {
-        title: cacheTitle,
-        url: currentSrc,
-      }).catch(() => {});
-    }
   }
 
   function useLocalFileFallback(): boolean {
@@ -499,109 +457,163 @@
     }
   }
 
-  async function tryLoadCachedOrStart() {
-    const srcStr = src?.trim() || "";
-    // Always try cached thumbnail when a cacheTitle is provided
-    if (enableCache && cacheTitle && cacheTitle.trim().length > 0) {
-      if (thumbMemo.has(cacheTitle)) {
-        const cached = thumbMemo.get(cacheTitle)!;
-        // Data URLs and remote URLs can be used directly
-        const resolved =
-          cached.startsWith("data:") ||
-          cached.startsWith("http://") ||
-          cached.startsWith("https://")
-            ? cached
-            : toAssetUrl(cached);
-        if (resolved) {
-          triedFallback = false;
-          usingDefault = false;
-          localFileFallback = resolved;
-          triedLocalFileFallback = false;
-          currentSrc = resolved;
-          // Data URLs should be considered loaded immediately
-          clearTimer();
-          loading = false;
-          loaded = true;
-          showSpinner = false;
-          releaseSlot();
-          dispatch("load");
-          return;
-        }
+  function resolveCachedPath(cached: string): string | null {
+    // Data URLs and remote URLs can be used directly
+    return cached.startsWith("data:") ||
+      cached.startsWith("http://") ||
+      cached.startsWith("https://")
+      ? cached
+      : toAssetUrl(cached);
+  }
+
+  function showCached(cached: string): boolean {
+    const resolved = resolveCachedPath(cached);
+    if (!resolved) return false;
+    cancelRemote();
+    resolvedOverride = resolved;
+    triedFallback = false;
+    usingDefault = false;
+    localFileFallback = resolved;
+    triedLocalFileFallback = false;
+    currentSrc = resolved;
+    clearTimer();
+    loading = false;
+    loaded = true;
+    showSpinner = false;
+    releaseSlot();
+    stopObserving();
+    dispatch("load");
+    return true;
+  }
+
+  function wantsRemote(): boolean {
+    return Boolean(
+      enableCache &&
+      hasThumbnail &&
+      cacheTitle &&
+      remoteSrc &&
+      /^https?:\/\//i.test(remoteSrc),
+    );
+  }
+
+  function fetchRemote() {
+    if (remoteRequest || !cacheTitle || !remoteSrc) return;
+    const title = cacheTitle;
+    const req = requestThumbnail(title, remoteSrc);
+    remoteRequest = req;
+    fetchingRemote = true;
+    void req.promise.then((path) => {
+      if (destroyed || title !== cacheTitle) return;
+      const current = remoteRequest === req;
+      if (current) {
+        remoteRequest = null;
+        fetchingRemote = false;
       }
+      if (path) {
+        thumbMemo.set(title, path);
+        showCached(path);
+      } else if (current) {
+        startLoading();
+      }
+    });
+  }
+
+  function cancelRemote() {
+    if (!remoteRequest) return;
+    remoteRequest.release();
+    remoteRequest = null;
+    fetchingRemote = false;
+    attemptedKey = null;
+  }
+
+  async function tryLoadCachedOrStart() {
+    if (enableCache && cacheTitle && cacheTitle.trim().length > 0) {
+      const title = cacheTitle;
+      const memo = thumbMemo.get(title);
+      if (memo && showCached(memo)) return;
       try {
         const cached = await invoke<string | null>(
           "get_cached_thumbnail_by_title",
-          { title: cacheTitle },
+          { title },
         );
+        if (destroyed || title !== cacheTitle) return;
         if (cached) {
-          thumbMemo.set(cacheTitle, cached);
-          // Data URLs and remote URLs can be used directly
-          const resolved =
-            cached.startsWith("data:") ||
-            cached.startsWith("http://") ||
-            cached.startsWith("https://")
-              ? cached
-              : toAssetUrl(cached);
-          triedFallback = false;
-          usingDefault = false;
-          localFileFallback = resolved;
-          triedLocalFileFallback = false;
-          currentSrc = resolved;
-          // Data URLs should be considered loaded immediately
-          clearTimer();
-          loading = false;
-          loaded = true;
-          showSpinner = false;
-          releaseSlot();
-          dispatch("load");
-          return;
+          thumbMemo.set(title, cached);
+          if (showCached(cached)) return;
         }
       } catch (_) {
         // ignore cache read errors
+      }
+      if (resolvedOverride) return;
+      if (wantsRemote()) {
+        if (inView && !deferLoad) fetchRemote();
+        else attemptedKey = null;
+        return;
       }
     }
     startLoading();
   }
 
-  function ensureObserved() {
-    if (inView || !wrapper) return;
-    if (unobserve) return;
-    unobserve = observeIntersection(
-      wrapper,
-      (entry) => {
-        if (!entry.isIntersecting) return;
-        inView = true;
-        unobserve?.();
-        unobserve = null;
-        tryLoadCachedOrStart();
-      },
-      { rootMargin: isLinux ? "0px" : "150px", threshold: 0.01 },
-    );
-  }
-
-  onMount(() => {
-    // If already in view on mount, we'll proceed immediately; else observe
-    ensureObserved();
-    if (inView) tryLoadCachedOrStart();
-  });
-
-  onDestroy(() => {
-    loadGeneration++;
-    clearTimer();
-    if (cacheRecheckTimer !== null) {
-      clearTimeout(cacheRecheckTimer);
-      cacheRecheckTimer = null;
-    }
-    releaseSlot();
+  function stopObserving() {
     if (unobserve) {
       unobserve();
       unobserve = null;
     }
+  }
+
+  // Thumbnails that may still be downloaded keep being observed so a card that
+  // scrolls away can cancel its pending fetch
+  function keepObserving(): boolean {
+    return enableCache && hasThumbnail && !!cacheTitle && !loaded;
+  }
+
+  function ensureObserved() {
+    if (!wrapper || unobserve || loaded) return;
+    if (inView && !keepObserving()) return;
+    unobserve = observeIntersection(
+      wrapper,
+      (entry) => {
+        if (entry.isIntersecting) {
+          inView = true;
+          if (!keepObserving()) stopObserving();
+        } else if (inView) {
+          inView = false;
+          cancelRemote();
+        }
+      },
+      {
+        root: findScrollRoot(wrapper),
+        rootMargin: rootMargin || (isLinux ? "0px" : "150px"),
+        threshold: 0.01,
+      },
+    );
+  }
+
+  onMount(() => {
+    ensureObserved();
   });
 
+  onDestroy(() => {
+    destroyed = true;
+    loadGeneration++;
+    clearTimer();
+    cancelRemote();
+    releaseSlot();
+    stopObserving();
+  });
+
+  $: if (cacheTitle !== overrideTitle) {
+    overrideTitle = cacheTitle;
+    resolvedOverride = null;
+    attemptedKey = null;
+    cancelRemote();
+  }
+
+  $: effectiveSrc = resolvedOverride ?? src;
+
   // Reset when src changes so pagination or prop updates reload correct image
-  $: if (src && src.trim().length > 0) {
-    const srcStr = src.trim();
+  $: if (effectiveSrc && effectiveSrc.trim().length > 0) {
+    const srcStr = effectiveSrc.trim();
     const resolved = resolveLocal(srcStr);
     // If we previously locked default for this src, keep showing default without retrying
     if (lockDefaultFor === srcStr) {
@@ -630,17 +642,24 @@
   } else {
     // If no src is provided, immediately show the static default cover
     resetToDefault();
-    lockDefaultFor = src ?? null;
+    lockDefaultFor = effectiveSrc ?? null;
   }
 
-  $: if (!deferLoad && inView && !loaded && !loading) {
+  $: attemptKey = `${cacheTitle ?? ""}|${remoteSrc ?? ""}`;
+
+  $: if (
+    !deferLoad &&
+    inView &&
+    !loaded &&
+    !loading &&
+    !fetchingRemote &&
+    attemptedKey !== attemptKey
+  ) {
+    attemptedKey = attemptKey;
     tryLoadCachedOrStart();
   }
 
-  $: showSpinnerOverlay =
-    hasThumbnail &&
-    (showSpinner ||
-      (!loaded && usingDefault && enableCache && !!cacheTitle && inView));
+  $: showSpinnerOverlay = hasThumbnail && (showSpinner || fetchingRemote);
 </script>
 
 <div

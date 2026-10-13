@@ -1,0 +1,81 @@
+import { invoke } from "@tauri-apps/api/core";
+
+/** Matches the `.mod-card` height and `.mods-grid` gap at a card scale of 1 */
+export const CARD_HEIGHT_PX = 330;
+export const GRID_GAP_PX = 30;
+
+/**
+ * IntersectionObserver rootMargin that reaches one card row past the visible
+ * area in both directions, so the next row starts loading before it scrolls in
+ */
+export function rowPreloadMargin(cardScale: number): string {
+  const scale = Number.isFinite(cardScale) && cardScale > 0 ? cardScale : 1;
+  const row = Math.round(CARD_HEIGHT_PX * scale + GRID_GAP_PX);
+  return `${row}px 0px`;
+}
+
+export interface ThumbnailRequest {
+  /** Resolves with the cached file path, or null when there is no thumbnail */
+  promise: Promise<string | null>;
+  /** Gives up on the request, the backend skips the download once nobody wants it */
+  release: () => void;
+}
+
+interface PendingThumb {
+  promise: Promise<string | null>;
+  refs: number;
+  cancelled: boolean;
+}
+
+/** How long a failed download is not retried when its card scrolls back in */
+export const FAILED_RETRY_MS = 5 * 60 * 1000;
+
+const pending = new Map<string, PendingThumb>();
+const failedAt = new Map<string, number>();
+
+export function requestThumbnail(title: string, url: string): ThumbnailRequest {
+  const failedTime = failedAt.get(title);
+  if (failedTime !== undefined && Date.now() - failedTime < FAILED_RETRY_MS) {
+    return { promise: Promise.resolve(null), release: () => {} };
+  }
+  let entry = pending.get(title);
+  if (!entry) {
+    const created: PendingThumb = {
+      promise: Promise.resolve(null),
+      refs: 0,
+      cancelled: false,
+    };
+    created.promise = invoke<string | null>("fetch_thumbnail", { title, url })
+      .catch(() => null)
+      .then((path) => {
+        if (pending.get(title) === created) pending.delete(title);
+        if (path) failedAt.delete(title);
+        else if (!created.cancelled) failedAt.set(title, Date.now());
+        return path ?? null;
+      });
+    pending.set(title, created);
+    entry = created;
+  }
+  const owned = entry;
+  owned.refs += 1;
+  let released = false;
+  return {
+    promise: owned.promise,
+    release: () => {
+      if (released) return;
+      released = true;
+      if (pending.get(title) !== owned) return;
+      owned.refs -= 1;
+      if (owned.refs > 0) return;
+      owned.cancelled = true;
+      pending.delete(title);
+      invoke("cancel_thumbnail", { title }).catch(() => {});
+    },
+  };
+}
+
+/** Test helper, forgets pending and failed requests */
+export function resetThumbnailRequests(): void {
+  pending.clear();
+  failedAt.clear();
+}

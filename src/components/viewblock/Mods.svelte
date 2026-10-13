@@ -287,8 +287,6 @@
   const renderChunkCatalog = 24;
   let catalogSentinel: HTMLDivElement | null = $state(null);
   let observerCatalog: IntersectionObserver | null = null;
-  let thumbRefreshTimer: number | null = null;
-  let thumbRefreshAttempts = 0;
   let selectedCollectionId = $state<string | null>(null);
   let newCollectionName = $state("");
   let renamingId = $state<string | null>(null);
@@ -684,13 +682,6 @@
           console.error("Install status check failed:", error);
         }
 
-        // Fill local thumbnails for installed mods to avoid remote image fetches
-        try {
-          await fillInstalledThumbnails($modsStore);
-        } catch (e) {
-          console.warn("thumbnail fill failed", e);
-        }
-
         if ($currentCategory === "Installed Mods") {
           await getLocalMods();
         }
@@ -815,10 +806,6 @@
       if (hydrationTimer !== null) {
         clearTimeout(hydrationTimer);
         hydrationTimer = null;
-      }
-      if (thumbRefreshTimer !== null) {
-        clearTimeout(thumbRefreshTimer);
-        thumbRefreshTimer = null;
       }
       if (loadingLocalModsTimer !== null) {
         clearTimeout(loadingLocalModsTimer);
@@ -1297,6 +1284,10 @@
         description: item.description,
         image: img,
         imageFallback: cachedThumb ? img : undefined,
+        thumbnailUrl:
+          hasThumb && /^https?:\/\//i.test(item.image_url)
+            ? item.image_url
+            : undefined,
         _hasThumbnail: hasThumb,
         colors: getRandomColorPair(),
         categories: mappedCategories,
@@ -1413,34 +1404,6 @@
       { titles },
     );
 
-    // Enqueue background caching for thumbnails
-    try {
-      const thumbItems = items
-        .filter((i) => i.image_url && /^https?:\/\//i.test(i.image_url))
-        .map((i) => ({ title: i.meta.title, url: i.image_url }));
-      if (thumbItems.length > 0) {
-        const seen = new Set<string>();
-        const toEnqueue = thumbItems.filter((t) => {
-          if (seen.has(t.title)) return false;
-          seen.add(t.title);
-          if (cachedMap[t.title]) return false;
-          // For foreground, also check existing mods
-          if (isForeground) {
-            const existing = $modsStore.find((m) => m.title === t.title);
-            if (existing?.image && !existing.image.endsWith("cover.jpg")) {
-              return false;
-            }
-          }
-          return true;
-        });
-        if (toEnqueue.length > 0) {
-          invoke("enqueue_thumbnails", { items: toEnqueue }).catch(() => {});
-        }
-      }
-    } catch (_) {
-      /* ignore */
-    }
-
     const mods: Mod[] = mapArchiveItems(items, cachedMap);
     const prunedCount = mergeIncomingMods(mods);
 
@@ -1504,9 +1467,7 @@
       /* ignore */
     }
 
-    // Fill thumbnails and descriptions
-    fillInstalledThumbnails($modsStore).catch(() => {});
-    scheduleThumbCacheRefresh(titles);
+    // Fill descriptions
     await withModsCachePersistenceSuspended(async () => {
       await withDescriptionsPersistenceSuspended(async () => {
         try {
@@ -1785,51 +1746,6 @@
     applyBatch();
   }
 
-  async function fillInstalledThumbnails(mods: Mod[]) {
-    const limit = 8;
-    let i = 0;
-    const client = async () => {
-      while (true) {
-        const idx = i++;
-        if (idx >= mods.length) break;
-        const m = mods[idx];
-        if (!m) continue;
-        if (!$installationStatus[m.title]) continue; // only for installed mods
-        const dir = m._dirName as string | void;
-        if (!dir) continue;
-        try {
-          const dataUrl = await invoke<string | null>(
-            "get_cached_installed_thumbnail",
-            { title: m.title, dirName: dir },
-          );
-          if (dataUrl) {
-            const resolved =
-              dataUrl.startsWith("data:") || dataUrl.startsWith("http")
-                ? dataUrl
-                : (toAssetUrl(dataUrl) ?? dataUrl);
-            modsStore.update((arr) => {
-              const pos = arr.findIndex((x) => x.title === m.title);
-              if (pos >= 0) {
-                arr = arr.slice();
-                arr[pos] = {
-                  ...arr[pos],
-                  image: resolved,
-                  imageFallback: undefined,
-                };
-              }
-              return arr;
-            });
-          }
-        } catch (_) {
-          // ignore per-mod failures
-        }
-      }
-    };
-    await Promise.all(
-      Array.from({ length: Math.min(limit, mods.length) }, () => client()),
-    );
-  }
-
   function mergeIncomingMods(incomingMods: Mod[]): number {
     let prunedCount = 0;
     modsStore.update((arr) => {
@@ -1900,74 +1816,6 @@
       return out;
     });
     return prunedCount;
-  }
-
-  async function applyCachedThumbnails(titles: string[]) {
-    if (!titles.length) return new Set<string>();
-    try {
-      const cachedMap = await invoke<Record<string, string>>(
-        "get_cached_thumbnails_map",
-        { titles },
-      );
-      if (!cachedMap || Object.keys(cachedMap).length === 0) {
-        return new Set<string>();
-      }
-      modsStore.update((arr) =>
-        arr.map((m) => {
-          const p = cachedMap[m.title];
-          if (!p) return m;
-          const src = toAssetUrl(p);
-          if (!src) return m;
-          return { ...m, image: src, imageFallback: src };
-        }),
-      );
-      return new Set<string>(Object.keys(cachedMap));
-    } catch (_) {
-      /* ignore */
-    }
-    return new Set<string>();
-  }
-
-  function scheduleThumbCacheRefresh(titles: string[]) {
-    if (!titles.length) return;
-    if (thumbRefreshTimer !== null) {
-      clearTimeout(thumbRefreshTimer);
-      thumbRefreshTimer = null;
-    }
-    thumbRefreshAttempts = 0;
-    const needsThumb = new Set(
-      $modsStore.filter((m) => m._hasThumbnail).map((m) => m.title),
-    );
-    const pendingTitles = titles.filter((t) => needsThumb.has(t));
-    if (pendingTitles.length === 0) return;
-
-    const poll = async () => {
-      thumbRefreshAttempts += 1;
-      let resolved = new Set<string>();
-      try {
-        resolved = await applyCachedThumbnails(pendingTitles);
-      } catch (_) {
-        // ignore
-      }
-      if (resolved.size > 0) {
-        for (const title of resolved) {
-          needsThumb.delete(title);
-        }
-      }
-      if (needsThumb.size === 0) {
-        thumbRefreshTimer = null;
-        return;
-      }
-      if (thumbRefreshAttempts >= 12) {
-        thumbRefreshTimer = null;
-        return;
-      }
-      thumbRefreshTimer = window.setTimeout(
-        poll,
-        thumbRefreshAttempts <= 4 ? 2000 : 5000,
-      );
-    };
-    thumbRefreshTimer = window.setTimeout(poll, 1500);
   }
 
   async function seedInstalledPlaceholders() {

@@ -11,6 +11,8 @@ export interface Mod {
   description: string;
   image: string;
   imageFallback?: string;
+  /** Index thumbnail URL, downloaded into the disk cache once the card is on screen */
+  thumbnailUrl?: string;
   // Internal optional fields used by views/cache
   _dirName?: string;
   _installedPath?: string;

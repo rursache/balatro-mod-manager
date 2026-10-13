@@ -69,20 +69,34 @@ export function acquireLoadSlot(): Promise<() => void> {
  * targets in webkit2gtk for the lifetime of the observer.
  */
 type IntersectCallback = (entry: IntersectionObserverEntry) => void;
+type ObserverPool = Map<string, IntersectionObserver>;
 const callbacks = new WeakMap<Element, IntersectCallback>();
-const observerPool = new Map<string, IntersectionObserver>();
+const viewportPool: ObserverPool = new Map();
+const elementPools = new WeakMap<Element, ObserverPool>();
 
 function poolKey(rootMargin: string, threshold: number): string {
   return `${rootMargin}|${threshold}`;
 }
 
+function poolFor(root: Element | null): ObserverPool {
+  if (!root) return viewportPool;
+  let pool = elementPools.get(root);
+  if (!pool) {
+    pool = new Map();
+    elementPools.set(root, pool);
+  }
+  return pool;
+}
+
 function getPooledObserver(
+  root: Element | null,
   rootMargin: string,
   threshold: number,
 ): IntersectionObserver | null {
   if (typeof IntersectionObserver === "undefined") return null;
+  const pool = poolFor(root);
   const key = poolKey(rootMargin, threshold);
-  let observer = observerPool.get(key);
+  let observer = pool.get(key);
   if (!observer) {
     observer = new IntersectionObserver(
       (entries) => {
@@ -91,11 +105,32 @@ function getPooledObserver(
           if (cb) cb(entry);
         }
       },
-      { root: null, rootMargin, threshold },
+      { root, rootMargin, threshold },
     );
-    observerPool.set(key, observer);
+    pool.set(key, observer);
   }
   return observer;
+}
+
+/**
+ * Nearest scrolling ancestor of `el`, or null for the viewport, since the card
+ * grid scrolls inside its own container and rootMargin only extends the root
+ */
+export function findScrollRoot(el: Element | null): Element | null {
+  if (typeof getComputedStyle === "undefined") return null;
+  let node = el?.parentElement ?? null;
+  while (node && node !== document.body && node !== document.documentElement) {
+    const overflowY = getComputedStyle(node).overflowY;
+    if (
+      overflowY === "auto" ||
+      overflowY === "scroll" ||
+      overflowY === "overlay"
+    ) {
+      return node;
+    }
+    node = node.parentElement;
+  }
+  return null;
 }
 
 /**
@@ -106,11 +141,19 @@ function getPooledObserver(
 export function observeIntersection(
   target: Element,
   cb: IntersectCallback,
-  options: { rootMargin?: string; threshold?: number } = {},
+  options: {
+    root?: Element | null;
+    rootMargin?: string;
+    threshold?: number;
+  } = {},
 ): () => void {
   const rootMargin = options.rootMargin ?? "0px";
   const threshold = options.threshold ?? 0.01;
-  const observer = getPooledObserver(rootMargin, threshold);
+  const observer = getPooledObserver(
+    options.root ?? null,
+    rootMargin,
+    threshold,
+  );
   if (!observer) {
     return () => {};
   }

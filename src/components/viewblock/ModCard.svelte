@@ -19,6 +19,7 @@
   import { cardScale, darkMode } from "../../stores/ui";
   import { normalizeColorPair, pickDarkPalette } from "../../utils/cardPalette";
   import { observeResize } from "../../utils/resize-observer-pool";
+  import { rowPreloadMargin } from "../../utils/thumbnailRequests";
   import { onMount, onDestroy } from "svelte";
   import { isLinuxPlatform } from "$lib/platform";
 
@@ -370,6 +371,8 @@
       fallbackSrc={mod.imageFallback || "/images/cover.jpg"}
       alt={mod.title}
       cacheTitle={mod.title}
+      remoteSrc={mod.thumbnailUrl}
+      rootMargin={rowPreloadMargin($cardScale)}
       deferLoad={deferImages}
       hasThumbnail={mod._hasThumbnail !== false}
       on:load={handleThumbDone}

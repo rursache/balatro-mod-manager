@@ -1,206 +1,149 @@
-use std::collections::HashSet;
-use std::sync::{Arc, Mutex};
+use std::collections::HashMap;
+use std::collections::hash_map::Entry;
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use reqwest::StatusCode;
 
 use crate::assets::{THUMB_CACHE_TTL_SECS, ensure_assets_dirs, safe_slug};
-use tokio::sync::{Semaphore, mpsc};
+use tokio::sync::{Semaphore, mpsc, oneshot};
 use tokio::time::{Duration, sleep};
 
-/// Background thumbnail fetch request
 #[derive(Clone, Debug)]
 struct ThumbReq {
     title: String,
     url: String,
     attempts: u32,
-    priority: bool, // High priority requests (visible thumbnails) are processed first
 }
 
-/// Manager that rate-limits and retries thumbnail downloads in the background.
-/// It honors 429 Retry-After when present, and uses exponential backoff for 5xx/network errors.
-/// Supports priority queueing for visible thumbnails.
+/// One queued download plus the callers waiting on it, `interest` drops when a card
+/// scrolls away and a job nobody wants anymore is skipped before it hits the network
+#[derive(Default)]
+struct Job {
+    interest: usize,
+    waiters: Vec<oneshot::Sender<bool>>,
+}
+
+type JobMap = Mutex<HashMap<String, Job>>;
+
+fn lock_jobs(jobs: &JobMap) -> MutexGuard<'_, HashMap<String, Job>> {
+    jobs.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Adds a waiter for `title`, returns true when a new download has to be queued
+fn register(jobs: &JobMap, title: &str, waiter: oneshot::Sender<bool>) -> bool {
+    let mut jobs = lock_jobs(jobs);
+    let (job, is_new) = match jobs.entry(title.to_string()) {
+        Entry::Occupied(e) => (e.into_mut(), false),
+        Entry::Vacant(e) => (e.insert(Job::default()), true),
+    };
+    job.interest += 1;
+    job.waiters.push(waiter);
+    is_new
+}
+
+fn release(jobs: &JobMap, title: &str) {
+    if let Some(job) = lock_jobs(jobs).get_mut(title) {
+        job.interest = job.interest.saturating_sub(1);
+    }
+}
+
+fn has_interest(jobs: &JobMap, title: &str) -> bool {
+    lock_jobs(jobs).get(title).is_some_and(|j| j.interest > 0)
+}
+
+fn finish(jobs: &JobMap, title: &str, cached: bool) {
+    let job = lock_jobs(jobs).remove(title);
+    for waiter in job.into_iter().flat_map(|j| j.waiters) {
+        let _ = waiter.send(cached);
+    }
+}
+
+/// Downloads thumbnails on demand for cards that are on screen, honors 429 Retry-After,
+/// backs off on 5xx/network errors and moves to the jsDelivr mirror when throttled
 #[derive(Clone)]
 pub struct ThumbnailManager {
-    tx_high: mpsc::Sender<ThumbReq>, // High priority channel (visible thumbnails)
-    tx_low: mpsc::Sender<ThumbReq>,  // Low priority channel (background prefetch)
-    // Prevent duplicate queueing per title within a session
-    enqueued: Arc<Mutex<HashSet<String>>>,
+    tx: mpsc::Sender<ThumbReq>,
+    jobs: Arc<JobMap>,
 }
-
-/// Upper bound on the dedupe set. Exceeding this triggers a trim down to
-/// `ENQUEUED_TRIM_TO`, so memory stays O(1) even if a session enqueues
-/// many distinct titles.
-const ENQUEUED_CAP: usize = 4096;
-const ENQUEUED_TRIM_TO: usize = 2048;
 
 impl ThumbnailManager {
     pub fn new() -> Self {
-        // Smaller bounded queues to avoid memory spikes - high priority gets processed first
-        let (tx_high, mut rx_high) = mpsc::channel::<ThumbReq>(128);
-        let (tx_low, mut rx_low) = mpsc::channel::<ThumbReq>(256);
-        let enqueued: Arc<Mutex<HashSet<String>>> = Arc::new(Mutex::new(HashSet::new()));
+        let (tx, mut rx) = mpsc::channel::<ThumbReq>(256);
+        let jobs: Arc<JobMap> = Arc::default();
 
         // Index thumbnails are full size originals, keep the load on raw.githubusercontent.com modest
         let semaphore = Arc::new(Semaphore::new(6));
         let client = crate::mod_index::http_client().clone();
 
-        // Spawn dispatcher task that prioritizes high-priority requests
-        let enq_for_task = enqueued.clone();
-        let tx_high_for_dispatch = tx_high.clone();
-        let tx_low_for_dispatch = tx_low.clone();
+        let jobs_for_task = jobs.clone();
+        let tx_retry = tx.clone();
         tauri::async_runtime::spawn(async move {
-            loop {
-                // Try high priority first (with timeout), then fall back to low priority
-                let req = tokio::select! {
-                    biased;
-                    Some(req) = rx_high.recv() => Some(req),
-                    Some(req) = rx_low.recv() => Some(req),
-                    else => None,
-                };
-
-                let Some(mut req) = req else {
-                    // Both channels closed
-                    break;
-                };
-
-                // Skip if file already exists or has been de-duped
-                if file_exists_for_title_async(&req.title).await {
-                    // Remove from enqueued set so future explicit requests are allowed
-                    if let Ok(mut set) = enq_for_task.lock() {
-                        set.remove(&req.title);
-                    }
-                    continue;
-                }
-
+            while let Some(mut req) = rx.recv().await {
                 let semaphore = semaphore.clone();
                 let client = client.clone();
-                let enq_set = enq_for_task.clone();
-                let tx_retry = if req.priority {
-                    tx_high_for_dispatch.clone()
-                } else {
-                    tx_low_for_dispatch.clone()
-                };
+                let jobs = jobs_for_task.clone();
+                let tx_retry = tx_retry.clone();
                 tauri::async_runtime::spawn(async move {
-                    // Acquire permit inside the spawned task to avoid blocking the dispatcher
-                    let _permit = match semaphore.acquire_owned().await {
-                        Ok(p) => p,
-                        Err(_) => return, // Semaphore closed
+                    let Ok(permit) = semaphore.acquire_owned().await else {
+                        finish(&jobs, &req.title, false);
+                        return;
                     };
-                    match fetch_and_store(&client, &req.title, &req.url).await {
-                        Ok(true) => {
-                            if let Ok(mut set) = enq_set.lock() {
-                                set.remove(&req.title);
-                            }
+                    if !has_interest(&jobs, &req.title) {
+                        log::debug!("Thumbnail skipped, no longer visible: '{}'", req.title);
+                        finish(&jobs, &req.title, false);
+                        return;
+                    }
+                    let delay = match fetch_and_store(&client, &req.title, &req.url).await {
+                        Ok(cached) => {
+                            finish(&jobs, &req.title, cached);
+                            return;
                         }
-                        Ok(false) => {
-                            // Non-retryable (e.g., 404/unsupported), drop and clear
-                            if let Ok(mut set) = enq_set.lock() {
-                                set.remove(&req.title);
-                            }
+                        Err(Backoff::RetryAfter(delay)) => delay,
+                        Err(Backoff::RetryWith(delay, url)) => {
+                            req.url = url;
+                            delay
                         }
-                        Err(backoff) => {
-                            let delay = match backoff {
-                                Backoff::RetryAfter(delay) => delay,
-                                Backoff::RetryWith(delay, url) => {
-                                    req.url = url;
-                                    delay
-                                }
-                            };
-                            req.attempts = req.attempts.saturating_add(1);
-                            if req.attempts > 3 {
-                                if let Ok(mut set) = enq_set.lock() {
-                                    set.remove(&req.title);
-                                }
-                                return;
-                            }
-                            let title = req.title.clone();
-                            tauri::async_runtime::spawn(async move {
-                                sleep(delay).await;
-                                // Put back into queue, keep enqueued flag as-is
-                                let _ = tx_retry.send(req).await;
-                                // If send fails, allow future enqueue by clearing mark
-                                if let Ok(mut set) = enq_set.lock() {
-                                    set.remove(&title);
-                                }
-                            });
-                        }
+                    };
+                    drop(permit);
+                    req.attempts = req.attempts.saturating_add(1);
+                    if req.attempts > 3 {
+                        finish(&jobs, &req.title, false);
+                        return;
+                    }
+                    sleep(delay).await;
+                    let title = req.title.clone();
+                    if tx_retry.send(req).await.is_err() {
+                        finish(&jobs, &title, false);
                     }
                 });
             }
         });
 
-        Self {
-            tx_high,
-            tx_low,
-            enqueued,
-        }
+        Self { tx, jobs }
     }
 
-    /// Enqueue a single thumbnail request if not already present and not already cached.
-    /// Use `priority = true` for visible thumbnails to download them first.
-    pub fn enqueue(&self, title: String, url: String) {
-        self.enqueue_with_priority(title, url, false);
-    }
-
-    /// Enqueue a single thumbnail with explicit priority.
-    /// High priority thumbnails (visible on screen) are processed before low priority ones.
-    pub fn enqueue_with_priority(&self, title: String, url: String, priority: bool) {
-        // Use sync file check here since we're in a sync context
-        if file_exists_for_title_sync(&title) {
-            return;
+    /// Resolves once the thumbnail for `title` is on disk (true) or could not be fetched
+    pub async fn fetch(&self, title: String, url: String) -> bool {
+        if file_exists_for_title_async(&title).await {
+            return true;
         }
-        // Insert into dedupe set. If it would exceed the cap, drop the oldest
-        // half (FIFO-ish — HashSet iteration order is arbitrary but stable
-        // enough here) so the set cannot grow without bound when the queue
-        // sees thousands of distinct titles per session.
-        if let Ok(mut set) = self.enqueued.lock() {
-            if !set.insert(title.clone()) {
-                return; // already queued
-            }
-            if set.len() > ENQUEUED_CAP {
-                let drop_n = set.len() - ENQUEUED_TRIM_TO;
-                let stale: Vec<String> = set.iter().take(drop_n).cloned().collect();
-                for k in stale {
-                    set.remove(&k);
-                }
+        let (waiter, done) = oneshot::channel();
+        if register(&self.jobs, &title, waiter) {
+            let req = ThumbReq {
+                title: title.clone(),
+                url,
+                attempts: 0,
+            };
+            if self.tx.try_send(req).is_err() {
+                finish(&self.jobs, &title, false);
             }
         }
-        let req = ThumbReq {
-            title: title.clone(),
-            url,
-            attempts: 0,
-            priority,
-        };
-        let send_result = if priority {
-            self.tx_high.try_send(req)
-        } else {
-            self.tx_low.try_send(req)
-        };
-        if send_result.is_err() {
-            // Channel full or closed. Clear the dedupe entry so a later call
-            // can retry instead of leaving the title pinned forever.
-            if let Ok(mut set) = self.enqueued.lock() {
-                set.remove(&title);
-            }
-        }
+        done.await.unwrap_or(false)
     }
 
-    /// Enqueue multiple thumbnail requests.
-    pub fn enqueue_many(&self, items: impl IntoIterator<Item = (String, String)>) {
-        for (title, url) in items {
-            self.enqueue(title, url);
-        }
-    }
-
-    /// Enqueue multiple thumbnail requests with priority support.
-    /// Items are tuples of (title, url, priority).
-    pub fn enqueue_many_with_priority(
-        &self,
-        items: impl IntoIterator<Item = (String, String, bool)>,
-    ) {
-        for (title, url, priority) in items {
-            self.enqueue_with_priority(title, url, priority);
-        }
+    /// Drops one caller's interest so a download that has not started yet gets skipped
+    pub fn cancel(&self, title: &str) {
+        release(&self.jobs, title);
     }
 }
 
@@ -225,16 +168,17 @@ fn mirror_on_throttle(status: StatusCode, url: &str) -> Option<String> {
     crate::mod_index::mirror_for(url)
 }
 
+/// `Ok(true)` when the thumbnail is on disk afterwards, `Ok(false)` when it cannot be fetched
 async fn fetch_and_store(
     client: &reqwest::Client,
     title: &str,
     url: &str,
 ) -> Result<bool, Backoff> {
-    log::info!("Thumbnail fetch start: title='{}' url='{}'", title, url);
-    // Don't waste network if already cached
+    // Another caller may have cached it while this request waited for a permit
     if file_exists_for_title_async(title).await {
-        return Ok(false);
+        return Ok(true);
     }
+    log::info!("Thumbnail fetch start: title='{}' url='{}'", title, url);
 
     let resp = match client.get(url).send().await {
         Ok(r) => r,
@@ -305,22 +249,6 @@ fn retry_after_delay(headers: &reqwest::header::HeaderMap) -> Option<Duration> {
     None
 }
 
-fn file_exists_for_title_sync(title: &str) -> bool {
-    let slug = safe_slug(title);
-    if let Ok((thumbs, _)) = ensure_assets_dirs() {
-        let p = thumbs.join(format!("{slug}.jpg"));
-        if !p.exists() {
-            return false;
-        }
-        if !is_thumb_fresh(&p) {
-            let _ = std::fs::remove_file(&p);
-            return false;
-        }
-        return true;
-    }
-    false
-}
-
 async fn file_exists_for_title_async(title: &str) -> bool {
     let slug = safe_slug(title);
     if let Ok((thumbs, _)) = ensure_assets_dirs() {
@@ -338,18 +266,6 @@ async fn file_exists_for_title_async(title: &str) -> bool {
     } else {
         false
     }
-}
-
-fn is_thumb_fresh(path: &std::path::Path) -> bool {
-    let modified = match std::fs::metadata(path).and_then(|m| m.modified()) {
-        Ok(ts) => ts,
-        Err(_) => return false,
-    };
-    let age = match std::time::SystemTime::now().duration_since(modified) {
-        Ok(d) => d,
-        Err(_) => return false,
-    };
-    age.as_secs() < THUMB_CACHE_TTL_SECS
 }
 
 fn is_thumb_fresh_from_metadata(meta: &std::fs::Metadata) -> bool {
@@ -490,26 +406,6 @@ mod tests {
         assert_eq!(result, Some(Duration::from_secs(3600)));
     }
 
-    // ==================== is_thumb_fresh tests ====================
-
-    #[test]
-    fn test_is_thumb_fresh_new_file() {
-        let temp_dir = TempDir::new().unwrap();
-        let path = temp_dir.path().join("test.jpg");
-        std::fs::write(&path, b"test data").unwrap();
-
-        // File just created should be fresh
-        assert!(is_thumb_fresh(&path));
-    }
-
-    #[test]
-    fn test_is_thumb_fresh_nonexistent_file() {
-        let temp_dir = TempDir::new().unwrap();
-        let path = temp_dir.path().join("nonexistent.jpg");
-
-        assert!(!is_thumb_fresh(&path));
-    }
-
     // ==================== is_thumb_fresh_from_metadata tests ====================
 
     #[test]
@@ -552,13 +448,11 @@ mod tests {
             title: "Test Mod".to_string(),
             url: "http://example.com/thumb.jpg".to_string(),
             attempts: 2,
-            priority: true,
         };
         let cloned = req.clone();
         assert_eq!(cloned.title, req.title);
         assert_eq!(cloned.url, req.url);
         assert_eq!(cloned.attempts, req.attempts);
-        assert_eq!(cloned.priority, req.priority);
     }
 
     #[test]
@@ -567,7 +461,6 @@ mod tests {
             title: "Test".to_string(),
             url: "http://example.com".to_string(),
             attempts: 0,
-            priority: false,
         };
         let debug_str = format!("{:?}", req);
         assert!(debug_str.contains("ThumbReq"));
@@ -583,5 +476,62 @@ mod tests {
             Backoff::RetryAfter(d) => assert_eq!(d, Duration::from_secs(5)),
             Backoff::RetryWith(..) => unreachable!(),
         }
+    }
+
+    // ==================== job bookkeeping tests ====================
+
+    #[test]
+    fn register_queues_once_per_title() {
+        let jobs = JobMap::default();
+        let (a, _ra) = oneshot::channel();
+        let (b, _rb) = oneshot::channel();
+        let (c, _rc) = oneshot::channel();
+        assert!(register(&jobs, "A", a));
+        assert!(!register(&jobs, "A", b));
+        assert!(register(&jobs, "B", c));
+        assert_eq!(lock_jobs(&jobs)["A"].interest, 2);
+    }
+
+    #[test]
+    fn cancel_skips_only_when_every_caller_left() {
+        let jobs = JobMap::default();
+        let (a, _ra) = oneshot::channel();
+        let (b, _rb) = oneshot::channel();
+        register(&jobs, "A", a);
+        register(&jobs, "A", b);
+        release(&jobs, "A");
+        assert!(has_interest(&jobs, "A"));
+        release(&jobs, "A");
+        assert!(!has_interest(&jobs, "A"));
+        // Scrolling back before the job starts revives it
+        let (c, _rc) = oneshot::channel();
+        assert!(!register(&jobs, "A", c));
+        assert!(has_interest(&jobs, "A"));
+    }
+
+    #[test]
+    fn release_unknown_title_is_a_noop() {
+        let jobs = JobMap::default();
+        release(&jobs, "missing");
+        assert!(!has_interest(&jobs, "missing"));
+        assert!(lock_jobs(&jobs).is_empty());
+    }
+
+    #[test]
+    fn finish_notifies_all_waiters_and_clears_job() {
+        let jobs = JobMap::default();
+        let (a, mut ra) = oneshot::channel();
+        let (b, mut rb) = oneshot::channel();
+        register(&jobs, "A", a);
+        register(&jobs, "A", b);
+        finish(&jobs, "A", true);
+        assert_eq!(ra.try_recv(), Ok(true));
+        assert_eq!(rb.try_recv(), Ok(true));
+        assert!(lock_jobs(&jobs).is_empty());
+
+        let (c, mut rc) = oneshot::channel();
+        assert!(register(&jobs, "A", c));
+        finish(&jobs, "A", false);
+        assert_eq!(rc.try_recv(), Ok(false));
     }
 }
