@@ -6,6 +6,7 @@ mod install_plan;
 mod links;
 mod mod_index;
 mod models;
+mod multiplayer;
 mod state;
 mod thumb_queue;
 mod thunderstore;
@@ -448,6 +449,11 @@ pub fn run() {
             commands::install::install_mod,
             commands::install::plan_catalog_install,
             commands::install::install_catalog_mod,
+            commands::multiplayer::multiplayer_status,
+            commands::multiplayer::multiplayer_plan,
+            commands::multiplayer::multiplayer_install,
+            commands::multiplayer::multiplayer_uninstall,
+            commands::multiplayer::multiplayer_migrate_legacy,
             commands::install::add_installed_mod,
             commands::install::remove_installed_mod,
             commands::install::get_steamodded_versions,

@@ -48,7 +48,7 @@ use crate::models::ModsChangedEvent;
 /// Maximum number of retry attempts for mod installation when rate limited.
 const INSTALL_MAX_RETRIES: u32 = 3;
 
-async fn sync_compat_helper_after_mod_change(state: &tauri::State<'_, AppState>) {
+pub(crate) async fn sync_compat_helper_after_mod_change(state: &tauri::State<'_, AppState>) {
     let enabled = {
         let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
         db.is_compat_helper_enabled().unwrap_or(false)
@@ -59,7 +59,7 @@ async fn sync_compat_helper_after_mod_change(state: &tauri::State<'_, AppState>)
 }
 
 /// Emit installed-mods-changed with optional delta information.
-fn emit_installed_mods_changed(
+pub(crate) fn emit_installed_mods_changed(
     app_handle: &tauri::AppHandle,
     added: Vec<String>,
     removed: Vec<String>,
@@ -74,7 +74,7 @@ fn emit_installed_mods_changed(
     );
 }
 
-fn refresh_mod_detection_cache() {
+pub(crate) fn refresh_mod_detection_cache() {
     local_mod_detection::clear_detection_cache();
 }
 
@@ -167,11 +167,10 @@ pub async fn launch_balatro(state: tauri::State<'_, AppState>) -> Result<(), Str
             format!("'{}'", balatro_executable.display())
         };
         // Spawn the process without waiting so the UI doesn't block
-        Command::new("sh")
-            .arg("-c")
-            .arg(cmd)
-            .spawn()
-            .map_err(|e| e.to_string())?;
+        let mut command = Command::new("sh");
+        command.arg("-c").arg(cmd);
+        crate::commands::multiplayer::scrub_bet_env(&mut command);
+        command.spawn().map_err(|e| e.to_string())?;
     }
 
     Ok(())
@@ -469,6 +468,11 @@ pub async fn launch_balatro(state: tauri::State<'_, AppState>) -> Result<(), Str
         }
     }
 
+    crate::commands::multiplayer::scrub_bet_env(&mut cmd);
+    if !is_vanilla {
+        crate::commands::multiplayer::apply_windows_launch(&mut cmd);
+    }
+
     cmd.spawn().map_err(|e| e.to_string())?;
     Ok(())
 }
@@ -623,6 +627,17 @@ pub async fn launch_balatro(state: tauri::State<'_, AppState>) -> Result<(), Str
             info!("Vanilla mode: skipping WINEDLLOVERRIDES injection");
         }
 
+        // Never pass BET_ variables, not even from the user's prefix command
+        launch_envs = crate::multiplayer::strip_bet_keys(launch_envs);
+        if !is_vanilla {
+            crate::commands::multiplayer::apply_wine_launch(
+                &state.db,
+                &path,
+                !is_steam_applaunch,
+                &mut launch_envs,
+            );
+        }
+
         // If using flatpak-spawn --host, inject env vars as --env=KEY=VALUE arguments
         // after --host but before the command. Otherwise, use cmd.env().
         if uses_flatpak_spawn && !launch_envs.is_empty() {
@@ -657,6 +672,7 @@ pub async fn launch_balatro(state: tauri::State<'_, AppState>) -> Result<(), Str
 
         // Apply environment variables directly to the command when not using flatpak-spawn
         if !uses_flatpak_spawn {
+            crate::commands::multiplayer::scrub_bet_env(&mut cmd);
             for (key, value) in &launch_envs {
                 cmd.env(key, value);
             }
@@ -811,6 +827,7 @@ pub async fn launch_balatro(state: tauri::State<'_, AppState>) -> Result<(), Str
     }
     strip_python_env(&mut love_cmd);
     strip_wrapper_env(&mut love_cmd);
+    crate::commands::multiplayer::scrub_bet_env(&mut love_cmd);
     log_launch_env("pre-spawn");
     info!(
         "Launching Balatro via LOVE (mode: {})\n  love_bin={}\n  love_lib={}\n  preload={}\n  cwd={}",
@@ -1198,7 +1215,7 @@ pub async fn add_installed_mod(
     Ok(())
 }
 
-fn installed_mods_dirs() -> Vec<PathBuf> {
+pub(crate) fn installed_mods_dirs() -> Vec<PathBuf> {
     local_mod_detection::mod_dir_candidates()
         .or_else(|_| local_mod_detection::resolve_mods_dir_path().map(|p| vec![p]))
         .unwrap_or_default()
@@ -1315,10 +1332,10 @@ async fn record_install(
 }
 
 /// Catalog, listing and local state the planner works from
-struct PlanInputs {
+pub(crate) struct PlanInputs {
     catalog: Vec<crate::models::ArchiveModItem>,
     packages: Vec<crate::thunderstore::TsPackage>,
-    installed: Vec<InstalledMod>,
+    pub(crate) installed: Vec<InstalledMod>,
     lovely_version: Option<String>,
     steamodded_installed: bool,
     steamodded_version: Option<String>,
@@ -1326,7 +1343,7 @@ struct PlanInputs {
 }
 
 impl PlanInputs {
-    fn context(&self) -> PlanContext<'_> {
+    pub(crate) fn context(&self) -> PlanContext<'_> {
         PlanContext {
             catalog: &self.catalog,
             packages: &self.packages,
@@ -1339,7 +1356,9 @@ impl PlanInputs {
     }
 }
 
-async fn load_plan_inputs(state: &tauri::State<'_, AppState>) -> Result<PlanInputs, String> {
+pub(crate) async fn load_plan_inputs(
+    state: &tauri::State<'_, AppState>,
+) -> Result<PlanInputs, String> {
     let (catalog, packages) = tokio::join!(
         crate::catalog::catalog_items(),
         crate::thunderstore::cached_packages()
@@ -1464,13 +1483,13 @@ pub async fn install_catalog_mod(
     })
 }
 
-struct PlanRun {
-    installed: Vec<InstalledCatalogMod>,
-    warnings: Vec<String>,
-    removed: usize,
+pub(crate) struct PlanRun {
+    pub(crate) installed: Vec<InstalledCatalogMod>,
+    pub(crate) warnings: Vec<String>,
+    pub(crate) removed: usize,
 }
 
-async fn run_plan(
+pub(crate) async fn run_plan(
     db: &std::sync::Mutex<bmm_lib::database::Database>,
     plan: &InstallPlan,
     install_steamodded: bool,

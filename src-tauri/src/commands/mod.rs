@@ -8,6 +8,7 @@ pub mod init;
 pub mod install;
 pub mod lovely;
 pub mod mods;
+pub mod multiplayer;
 pub mod paths;
 pub mod repo;
 pub mod report;
