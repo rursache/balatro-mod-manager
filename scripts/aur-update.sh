@@ -31,13 +31,13 @@ cleanup() {
         mv .SRCINFO.bak .SRCINFO
         echo "Reverted changes."
     fi
-    rm -rf pkg src *.pkg.tar.zst *.deb
+    rm -rf pkg src ./*.pkg.tar.zst ./*.deb
 }
 
 trap cleanup ERR
 
 # Check if release exists before making changes
-DEB_URL="https://github.com/rursache/balatro-mod-manager/releases/download/v${NEW_VERSION}/Balatro.Mod.Manager_${NEW_VERSION}_amd64.deb"
+DEB_URL="https://github.com/rursache/balatro-mod-manager/releases/download/v${NEW_VERSION}/Balatro-Mod-Manager-${NEW_VERSION}-linux-amd64.deb"
 echo "Checking if release v$NEW_VERSION exists..."
 HTTP_STATUS=$(curl -sI -o /dev/null -w "%{http_code}" "$DEB_URL")
 if [ "$HTTP_STATUS" != "200" ] && [ "$HTTP_STATUS" != "302" ]; then
@@ -47,8 +47,11 @@ if [ "$HTTP_STATUS" != "200" ] && [ "$HTTP_STATUS" != "302" ]; then
     exit 1
 fi
 
-# Update PKGBUILD
+# Update PKGBUILD, the source line follows the release asset naming
 sed -i "s/pkgver=.*/pkgver=$NEW_VERSION/" PKGBUILD
+sed -i "s|^url=.*|url='https://github.com/rursache/balatro-mod-manager'|" PKGBUILD
+# shellcheck disable=SC2016 # PKGBUILD variables expand in makepkg, not here
+sed -i 's|^source=.*|source=("${_pkgname}-${pkgver}.deb::https://github.com/rursache/${_pkgname}/releases/download/v${pkgver}/Balatro-Mod-Manager-${pkgver}-linux-amd64.deb")|' PKGBUILD
 
 # Update checksum
 echo "Downloading release and generating checksum..."
@@ -70,7 +73,7 @@ echo ""
 read -p "Test build? [Y/n] " -n 1 -r
 echo
 if [[ ! $REPLY =~ ^[Nn]$ ]]; then
-    rm -rf pkg src *.pkg.tar.zst
+    rm -rf pkg src ./*.pkg.tar.zst
     if ! makepkg -sf; then
         echo "Build failed!"
         exit 1
@@ -89,7 +92,7 @@ trap - ERR
 read -p "Commit and push to AUR? [y/N] " -n 1 -r
 echo
 if [[ $REPLY =~ ^[Yy]$ ]]; then
-    rm -rf pkg src *.pkg.tar.zst *.deb
+    rm -rf pkg src ./*.pkg.tar.zst ./*.deb
     git add PKGBUILD .SRCINFO
     git commit -m "Update to $NEW_VERSION"
     git push

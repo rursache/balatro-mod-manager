@@ -45,32 +45,23 @@ Balatro Mod Manager is available for Windows, macOS, and Linux. The installer is
 
 Scroll down to find **▸Assets** and download the right version of the installer for your system.
 
-- Windows: `Balatro.Mod.Manager_…_x64-setup.exe` or `Balatro.Mod.Manager_…_x64_en-US.msi`
-- macOS: `Balatro.Mod.Manager_…_universal.dmg`
-- Linux: Flatpak (recommended), AUR, or `Balatro.Mod.Manager_…_amd64.AppImage`
+- Windows: `Balatro-Mod-Manager-<version>-windows-x64-setup.exe` or `Balatro-Mod-Manager-<version>-windows-x64.msi`
+- macOS: `Balatro-Mod-Manager-<version>-macos-universal.dmg` (or the `.zip` with the app inside), or Homebrew
+- Linux: Flatpak (`Balatro-Mod-Manager-<version>-linux.flatpak`), AUR, `Balatro-Mod-Manager-<version>-linux-amd64.AppImage`, `-linux-amd64.deb` or `-linux-x86_64.rpm`
+
+Every release also ships `checksums.txt` with the SHA-256 of each asset
 
 ### Installing on macOS
 
-The macOS build is signed ad-hoc (not notarized by Apple), so Gatekeeper blocks the first launch. After installing once, the app opens normally on every subsequent launch.
+The macOS build is a universal app (Apple Silicon and Intel), signed with a Developer ID and notarized by Apple, so it opens without any Gatekeeper workaround
 
-1. Mount the `.dmg` and drag **Balatro Mod Manager** into `/Applications`.
-2. Try to open it. macOS will refuse with either *"Apple cannot verify..."* or *"is damaged and can't be opened"*. Close the dialog.
-3. Pick one of the following bypasses:
+- Homebrew:
+  ```bash
+  brew install --cask rursache/tap/balatro-mod-manager
+  ```
+- Or mount the `.dmg` and drag **Balatro Mod Manager** into `/Applications`
 
-   **Option A, System Settings (macOS 14 and newer, no Terminal):**
-   - Open **System Settings → Privacy & Security**.
-   - Scroll to the **Security** section. You should see a line about Balatro Mod Manager being blocked, with an **Open Anyway** button. Click it and confirm.
-   - If no button appears (macOS 15+ sometimes hides it for "damaged" bundles), use Option B.
-
-   **Option B, Terminal one-liner (works on every macOS version):**
-   ```bash
-   xattr -dr com.apple.quarantine "/Applications/Balatro Mod Manager.app"
-   ```
-   Then double-click the app normally.
-
-   **Option C, older macOS (13 and below):** right-click the app → **Open** → confirm in the dialog.
-
-Why this happens: shipping notarized builds requires an active Apple Developer Program membership ($99/year). The app is ad-hoc signed so it runs on Apple Silicon, but Apple's notarization service is what would silence Gatekeeper. The friction is one-time per install.
+Releases before the notarized builds were only ad hoc signed. If macOS refuses to open one of those, run `xattr -dr com.apple.quarantine "/Applications/Balatro Mod Manager.app"` once
 
 ### Arch Linux (AUR)
 
@@ -87,7 +78,7 @@ paru -S balatro-mod-manager-bin
 Download the `.deb` from the [latest release](https://github.com/rursache/balatro-mod-manager/releases/latest) and install:
 
 ```bash
-sudo apt install ./Balatro.Mod.Manager_*_amd64.deb
+sudo apt install ./Balatro-Mod-Manager-*-linux-amd64.deb
 ```
 
 ## Flatpak (Steam Deck/Linux)
@@ -115,7 +106,6 @@ sudo apt install ./Balatro.Mod.Manager_*_amd64.deb
   flatpak install --user balatro-mod-manager.flatpak
   flatpak run io.balatro.ModManager
   ```
-  AppImage/Deb/RPM still land in `target/release/bundle/` during the Flatpak build if you need them.
 
 # [![Build](images/build.svg)](#build-prerequisites)
 
@@ -212,7 +202,15 @@ Every platform has one script in `scripts/` that writes its artifacts to `dist/<
 | `task build:linux` | `scripts/build-linux.sh` | `.deb`, `.AppImage`, `.rpm` | Docker (OrbStack or Docker Desktop on macOS), the image comes from `packaging/Dockerfile` |
 | `task build:all` | all of the above | everything | macOS with all of the above |
 
-Builds are ad hoc signed on macOS and unsigned on Windows. Set `APPLE_SIGNING_IDENTITY` (and `APPLE_ID`, `APPLE_PASSWORD`, `APPLE_TEAM_ID` to notarize) before `build:macos` to sign with a real identity. `SKIP_FRONTEND=1` reuses an existing `build/` folder
+Builds are ad hoc signed on macOS and unsigned on Windows. Set `APPLE_SIGNING_IDENTITY` (and `APPLE_ID`, `APPLE_PASSWORD`, `APPLE_TEAM_ID` to notarize) before `build:macos` to sign with a real identity. `SKIP_FRONTEND=1` reuses an existing `build/` folder. `BUNDLES=app scripts/build-macos.sh` only builds the `.app` into `dist/macos`
+
+The version shown in the app comes from git: the tag on `HEAD` (without the leading `v`), otherwise the short commit hash, otherwise `dev`. `BMM_VERSION=1.2.3` overrides it. Only tagged builds check GitHub for app updates
+
+`RELEASE_VERSION=1.2.3` switches the scripts to release mode: the bundle version and the in app version become `1.2.3` and the artifacts get release names like `Balatro-Mod-Manager-1.2.3-macos-universal.dmg`. Without it the bundle keeps the static version from `tauri.conf.json` and Tauri's default file names
+
+### Publishing a release
+
+Publishing a GitHub release runs `.github/workflows/release.yml`, which builds every platform with the scripts above, signs and notarizes the macOS app, uploads the assets and `checksums.txt` to the release and updates the Homebrew cask (stable releases only). Running the workflow by hand with a tag and `dry_run` builds, signs and notarizes without touching the release, the assets stay attached to the workflow run. MSI installers are skipped for tags WiX cannot encode (anything other than `x.y.z` or `x.y.z-N`)
 
 Cross compiling to Windows relies on a patched copy of `unrar_sys` in `src-tauri/vendor/unrar_sys` (see `PATCHED.md` there)
 
