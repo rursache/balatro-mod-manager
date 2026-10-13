@@ -314,13 +314,18 @@ jobs:
           name: checksums
           path: assets/checksums.txt
 
+      # Only the asset endpoints are used: updating the release itself resends its tag, which
+      # GITHUB_TOKEN may not do once main's workflow files differ from the tagged commit
       - name: Upload assets to the release
         if: needs.meta.outputs.dry_run != 'true'
-        uses: softprops/action-gh-release@v3
-        with:
-          tag_name: ${{ needs.meta.outputs.tag }}
-          files: assets/*
-          fail_on_unmatched_files: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.meta.outputs.tag }}
+        run: |
+          shopt -s nullglob
+          files=(assets/*)
+          [ "${#files[@]}" -gt 0 ] || { echo "::error::no assets to upload"; exit 1; }
+          gh release upload "$TAG" "${files[@]}" --clobber --repo "$GITHUB_REPOSITORY"
 
       - name: Trigger Homebrew tap update
         if: needs.meta.outputs.dry_run != 'true' && needs.meta.outputs.prerelease != 'true'
