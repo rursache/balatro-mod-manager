@@ -31,6 +31,7 @@ jobs:
       version: ${{ steps.meta.outputs.version }}
       prerelease: ${{ steps.meta.outputs.prerelease }}
       dry_run: ${{ steps.meta.outputs.dry_run }}
+      ref: ${{ steps.meta.outputs.ref }}
     steps:
       - name: Resolve tag, version and mode
         id: meta
@@ -64,7 +65,19 @@ jobs:
             || [ "${BASH_REMATCH[3]}" -gt 65535 ] || [ "${BASH_REMATCH[5]:-0}" -gt 65535 ]; then
             echo "::warning::WiX cannot encode $VERSION, the Windows MSI is skipped and only the NSIS installer ships"
           fi
+          # Dry runs may test a tag that does not exist yet, they then build the dispatched commit
+          REF="refs/tags/$TAG"
+          if ! gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" >/dev/null 2>&1; then
+            if [ "$DRY_RUN" = "true" ]; then
+              echo "::notice::Tag $TAG does not exist yet, building $GITHUB_SHA instead"
+              REF="$GITHUB_SHA"
+            else
+              echo "::error::Tag $TAG does not exist"
+              exit 1
+            fi
+          fi
           {
+            echo "ref=$REF"
             echo "tag=$TAG"
             echo "version=$VERSION"
             echo "prerelease=$PRERELEASE"
@@ -84,7 +97,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: refs/tags/${{ needs.meta.outputs.tag }}
+          ref: ${{ needs.meta.outputs.ref }}
           fetch-depth: 0
 
       - uses: oven-sh/setup-bun@v2
@@ -178,7 +191,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: refs/tags/${{ needs.meta.outputs.tag }}
+          ref: ${{ needs.meta.outputs.ref }}
           fetch-depth: 0
 
       - uses: oven-sh/setup-bun@v2
@@ -209,7 +222,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: refs/tags/${{ needs.meta.outputs.tag }}
+          ref: ${{ needs.meta.outputs.ref }}
           fetch-depth: 0
 
       - uses: oven-sh/setup-bun@v2
@@ -241,7 +254,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: refs/tags/${{ needs.meta.outputs.tag }}
+          ref: ${{ needs.meta.outputs.ref }}
 
       - name: Pass the app version into the Flatpak build
         run: |
