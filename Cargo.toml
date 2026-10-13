@@ -37,3 +37,7 @@ codegen-units = 1
 strip = "debuginfo"
 opt-level = 3
 
+
+# Patched for cross compiling to Windows, see src-tauri/vendor/unrar_sys/PATCHED.md
+[patch.crates-io]
+unrar_sys = { path = "src-tauri/vendor/unrar_sys" }
