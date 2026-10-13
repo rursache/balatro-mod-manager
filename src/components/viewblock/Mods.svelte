@@ -12,7 +12,6 @@
     RefreshCw,
     X,
   } from "lucide-svelte";
-  import ModView from "./ModView.svelte";
   import MultiplayerView from "./MultiplayerView.svelte";
   import { fly } from "svelte/transition";
   import {
@@ -3234,7 +3233,7 @@
           </div>
         {:else}
           <div class="controls-container">
-            {#if $currentCategory === "Installed Mods" && !$currentModView}
+            {#if $currentCategory === "Installed Mods"}
               <div
                 class="controls-left"
                 in:fly={{ duration: 400, y: 10, opacity: 0.2 }}
@@ -3267,7 +3266,7 @@
               </div>
             {/if}
 
-            {#if $currentCategory !== "Installed Mods" && !$currentModView}
+            {#if $currentCategory !== "Installed Mods"}
               <div
                 class="catalog-toolbar"
                 in:fly={{ duration: 400, y: 10, opacity: 0.2 }}
@@ -3308,7 +3307,7 @@
               class="sort-controls"
               in:fly={{ duration: 400, y: 10, opacity: 0.2 }}
             >
-              {#if $currentCategory === "Installed Mods" && !$currentModView}
+              {#if $currentCategory === "Installed Mods"}
                 <div class="installed-search-wrapper">
                   <Search size={16} class="installed-search-icon" />
                   <input
@@ -3610,14 +3609,7 @@
     {/if}
   </div>
 
-  {#if $currentModView}
-    <ModView
-      mod={$currentModView!}
-      onCheckDependencies={handleDependencyCheck}
-    />
-  {/if}
-
-  {#if $currentCategory === "Installed Mods" && !$currentModView}
+  {#if $currentCategory === "Installed Mods"}
     <BulkActionBar
       allSelectableIds={allSelectableModIds}
       {catalogModIds}
