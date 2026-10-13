@@ -6,6 +6,7 @@
   import { isLinuxPlatform } from "../lib/platform";
   import { onMount } from "svelte";
   import { Check } from "lucide-svelte";
+  import { launchBalatro } from "../utils/launch";
 
   let showAlert = false;
   let isLinux = false;
@@ -64,34 +65,15 @@
   }
 
   async function doLaunch() {
-    let usesSteam = false;
-    if (isLinux) {
-      const is_balatro_running: boolean = await invoke("check_balatro_running");
-      if (is_balatro_running) {
+    const result = await launchBalatro(isLinux);
+    if (!result.launched) {
+      if (result.reason === "already_running") {
         addMessage("Balatro is already running", "error");
-        return { launched: false, usesSteam };
+      } else {
+        showAlert = true;
       }
     }
-
-    const path = await invoke("get_balatro_path");
-    if (path && path.toString().includes("Steam")) {
-      usesSteam = true;
-      const is_balatro_running: boolean = await invoke("check_balatro_running");
-      if (is_balatro_running) {
-        addMessage("Balatro is already running", "error");
-        return { launched: false, usesSteam };
-      }
-      if (!isLinux) {
-        const is_steam_running: boolean = await invoke("check_steam_running");
-        if (!is_steam_running) {
-          showAlert = true;
-          return { launched: false, usesSteam };
-        }
-      }
-    }
-
-    await invoke("launch_balatro");
-    return { launched: true, usesSteam };
+    return result;
   }
 
   const handleLaunch = async () => {
