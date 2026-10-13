@@ -544,6 +544,22 @@ fn dependency_needs_install(
     false
 }
 
+/// The Multiplayer tracks exclude each other, so their packages are only installed from
+/// the Multiplayer section, never pulled in as a dependency of another mod
+fn refuse_multiplayer_dependency(
+    root: &TsPackage,
+    dependency: &TsPackage,
+    dependent: &str,
+) -> Result<(), String> {
+    if thunderstore::is_multiplayer(dependency) && !thunderstore::is_multiplayer(root) {
+        return Err(format!(
+            "{dependent} needs {}, install or update it from the Multiplayer section first",
+            dependency.full_name
+        ));
+    }
+    Ok(())
+}
+
 fn node_key(full_name: &str) -> String {
     full_name.to_ascii_lowercase()
 }
@@ -648,6 +664,7 @@ fn plan_thunderstore(
                         &existing.title,
                         &mut warnings,
                     ) {
+                        refuse_multiplayer_dependency(root_pkg, existing.pkg, &title)?;
                         existing.install = true;
                         queue.push(dep_key);
                     }
@@ -675,6 +692,9 @@ fn plan_thunderstore(
             let dep_tracked = tracked_package(ctx, &pkg.full_name);
             let install =
                 dependency_needs_install(dep_tracked, &dep.version, &dep_title, &mut warnings);
+            if install {
+                refuse_multiplayer_dependency(root_pkg, pkg, &title)?;
+            }
             nodes.insert(
                 dep_key.clone(),
                 Node {
@@ -1305,6 +1325,45 @@ mod tests {
         assert_eq!(plan.steps.last().unwrap().tracked_name, None);
         // Its Pokermon dependency is the merged entry the user tracks from the index
         assert_eq!(plan.satisfied[0].tracked_name, "Pokermon");
+    }
+
+    #[test]
+    fn general_catalog_mods_never_pull_in_a_multiplayer_track() {
+        let mut packages = fixture_packages();
+        packages.push(package(
+            "SomeDev-CoolMode",
+            "1.0.0",
+            &["BalatroMultiplayer-MultiplayerAPI-0.1.2"],
+        ));
+        let catalog = catalog_items(&packages);
+        let error = plan_install(
+            &ctx(&catalog, &packages, &[]),
+            "ts:SomeDev-CoolMode",
+            None,
+            None,
+        )
+        .expect_err("needs the Multiplayer section");
+        assert!(
+            error.contains("BalatroMultiplayer-MultiplayerAPI"),
+            "{error}"
+        );
+        assert!(error.contains("Multiplayer section"), "{error}");
+
+        // An installed API that is recent enough is fine
+        let installed = [row(
+            "MultiplayerAPI",
+            SOURCE_THUNDERSTORE,
+            Some("BalatroMultiplayer-MultiplayerAPI"),
+            "0.1.2",
+        )];
+        let plan = plan_install(
+            &ctx(&catalog, &packages, &installed),
+            "ts:SomeDev-CoolMode",
+            None,
+            None,
+        )
+        .expect("plan");
+        assert_eq!(step_names(&plan), ["SomeDev-CoolMode"]);
     }
 
     #[test]
