@@ -90,6 +90,17 @@ struct ModRecord {
     path: String,
     dependencies: Vec<String>,
     current_version: Option<String>,
+    // Snapshots made before sources existed only hold index installs
+    #[serde(default = "default_source")]
+    source: String,
+    #[serde(default)]
+    source_id: Option<String>,
+    #[serde(default)]
+    installed_at: Option<i64>,
+}
+
+fn default_source() -> String {
+    crate::database::SOURCE_INDEX.to_string()
 }
 
 impl From<InstalledMod> for ModRecord {
@@ -99,6 +110,9 @@ impl From<InstalledMod> for ModRecord {
             path: m.path,
             dependencies: m.dependencies,
             current_version: m.current_version,
+            source: m.source,
+            source_id: m.source_id,
+            installed_at: m.installed_at,
         }
     }
 }
@@ -643,12 +657,16 @@ fn restore_database_state(db: &Database, snapshot: &DatabaseSnapshot) -> Result<
 
     // Add mods from snapshot
     for mod_record in &snapshot.installed_mods {
-        db.add_installed_mod(
-            &mod_record.name,
-            &mod_record.path,
-            &mod_record.dependencies,
-            mod_record.current_version.clone(),
-        )?;
+        db.put_installed_mod(&InstalledMod {
+            name: mod_record.name.clone(),
+            path: mod_record.path.clone(),
+            dependencies: mod_record.dependencies.clone(),
+            current_version: mod_record.current_version.clone(),
+            orphaned: false,
+            source: mod_record.source.clone(),
+            source_id: mod_record.source_id.clone(),
+            installed_at: mod_record.installed_at,
+        })?;
     }
 
     Ok(())
@@ -808,6 +826,9 @@ mod tests {
             dependencies: vec!["Steamodded".to_string()],
             current_version: Some("1.0.0".to_string()),
             orphaned: false,
+            source: crate::database::SOURCE_THUNDERSTORE.to_string(),
+            source_id: Some("Ns-TestMod".to_string()),
+            installed_at: Some(1),
         };
 
         let record = ModRecord::from(installed);
@@ -815,6 +836,17 @@ mod tests {
         assert_eq!(record.path, "/path/to/mod");
         assert_eq!(record.dependencies, vec!["Steamodded"]);
         assert_eq!(record.current_version, Some("1.0.0".to_string()));
+        assert_eq!(record.source_id.as_deref(), Some("Ns-TestMod"));
+    }
+
+    #[test]
+    fn test_mod_record_without_source_defaults_to_index() {
+        let record: ModRecord = serde_json::from_str(
+            r#"{"name":"Old","path":"/p","dependencies":[],"current_version":null}"#,
+        )
+        .unwrap();
+        assert_eq!(record.source, crate::database::SOURCE_INDEX);
+        assert!(record.source_id.is_none());
     }
 
     #[test]
