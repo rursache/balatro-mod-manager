@@ -11,6 +11,7 @@
   } from "../../utils/image-loader-shared";
   import {
     requestThumbnail,
+    thumbnailKey,
     type ThumbnailRequest,
   } from "../../utils/thumbnailRequests";
 
@@ -22,6 +23,8 @@
   // Optional caching by title: when provided, we try to use a cached
   // thumbnail and download `remoteSrc` into the cache once in view
   export let cacheTitle: string | void;
+  // Catalog id, keys the cache instead of the title when set
+  export let cacheId: string | void = undefined;
   export let remoteSrc: string | void = undefined;
   export let enableCache: boolean = true;
   export let deferLoad: boolean = false;
@@ -72,7 +75,9 @@
   let destroyed = false;
   // Cached thumbnail found or downloaded for cacheTitle, wins over `src`
   let resolvedOverride: string | null = null;
-  let overrideTitle: string | void = cacheTitle;
+  let overrideTitle: string | void = cacheTitle
+    ? thumbnailKey(cacheTitle, cacheId || null)
+    : cacheTitle;
   let remoteRequest: ThumbnailRequest | null = null;
   let fetchingRemote = false;
   // cacheTitle|remoteSrc pair already tried while in view, avoids refetching on every scroll
@@ -276,7 +281,7 @@
     triedFallback = false;
     usingDefault = false;
     triedLocalFileFallback = false;
-    const { url: cacheUrl } = await buildCachePaths(cacheTitle);
+    const { url: cacheUrl } = await buildCachePaths(cacheKey);
     if (gen !== loadGeneration) return;
     localFileFallback = cacheUrl;
     const resolved = resolveLocal(src);
@@ -497,13 +502,13 @@
   }
 
   function fetchRemote() {
-    if (remoteRequest || !cacheTitle || !remoteSrc) return;
-    const title = cacheTitle;
-    const req = requestThumbnail(title, remoteSrc);
+    if (remoteRequest || !cacheTitle || !cacheKey || !remoteSrc) return;
+    const title = cacheKey;
+    const req = requestThumbnail(cacheTitle, remoteSrc, cacheId || null);
     remoteRequest = req;
     fetchingRemote = true;
     void req.promise.then((path) => {
-      if (destroyed || title !== cacheTitle) return;
+      if (destroyed || title !== cacheKey) return;
       const current = remoteRequest === req;
       if (current) {
         remoteRequest = null;
@@ -527,16 +532,16 @@
   }
 
   async function tryLoadCachedOrStart() {
-    if (enableCache && cacheTitle && cacheTitle.trim().length > 0) {
-      const title = cacheTitle;
+    if (enableCache && cacheTitle && cacheKey && cacheTitle.trim().length > 0) {
+      const title = cacheKey;
       const memo = thumbMemo.get(title);
       if (memo && showCached(memo)) return;
       try {
         const cached = await invoke<string | null>(
           "get_cached_thumbnail_by_title",
-          { title },
+          title === cacheTitle ? { title } : { title: cacheTitle, id: title },
         );
-        if (destroyed || title !== cacheTitle) return;
+        if (destroyed || title !== cacheKey) return;
         if (cached) {
           thumbMemo.set(title, cached);
           if (showCached(cached)) return;
@@ -602,8 +607,12 @@
     stopObserving();
   });
 
-  $: if (cacheTitle !== overrideTitle) {
-    overrideTitle = cacheTitle;
+  $: cacheKey = cacheTitle
+    ? thumbnailKey(cacheTitle, cacheId || null)
+    : cacheTitle;
+
+  $: if (cacheKey !== overrideTitle) {
+    overrideTitle = cacheKey;
     resolvedOverride = null;
     attemptedKey = null;
     cancelRemote();
@@ -645,7 +654,7 @@
     lockDefaultFor = effectiveSrc ?? null;
   }
 
-  $: attemptKey = `${cacheTitle ?? ""}|${remoteSrc ?? ""}`;
+  $: attemptKey = `${cacheKey ?? ""}|${remoteSrc ?? ""}`;
 
   $: if (
     !deferLoad &&

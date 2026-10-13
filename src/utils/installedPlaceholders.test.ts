@@ -1,6 +1,9 @@
 import { describe, it, expect } from "vitest";
 import {
   ORPHAN_DESCRIPTION,
+  computeInstallationStatus,
+  findInstalledRow,
+  indexInstalledRows,
   hasActionableUpdate,
   isBrowsableMod,
   isInstalledPlaceholder,
@@ -166,6 +169,91 @@ describe("isBrowsableMod", () => {
     expect(isBrowsableMod(catalogMod("Cached", { _dirName: undefined }))).toBe(
       true,
     );
+  });
+});
+
+describe("Thunderstore rows", () => {
+  const tsRow = (name: string, sourceId: string): InstalledMod => ({
+    ...row(name),
+    source: "thunderstore",
+    source_id: sourceId,
+  });
+  const tsCard = (title: string, fullName: string, dir = `ts:${fullName}`) =>
+    catalogMod(title, {
+      _dirName: dir,
+      source: dir.startsWith("ts:") ? "thunderstore" : "merged",
+      thunderstore: {
+        full_name: fullName,
+      } as Mod["thunderstore"],
+    });
+
+  it("matches installed packages by id, never by a shared name", () => {
+    const index = tsCard(
+      "Pokermon",
+      "InertSteak-Pokermon",
+      "InertSteak@Pokermon",
+    );
+    const plus = tsCard("Pokermon (PokermonPlus)", "PokermonPlus-Pokermon");
+    const status = computeInstallationStatus(
+      [index, plus],
+      [tsRow("Pokermon", "PokermonPlus-Pokermon")],
+    );
+    expect(status).toEqual({
+      Pokermon: false,
+      "Pokermon (PokermonPlus)": true,
+    });
+    expect(
+      findInstalledRow(
+        plus,
+        indexInstalledRows([tsRow("Pokermon", "PokermonPlus-Pokermon")]),
+      )?.name,
+    ).toBe("Pokermon");
+  });
+
+  it("still matches index rows by name", () => {
+    const status = computeInstallationStatus(
+      [catalogMod("Divvy's Preview"), tsCard("Other", "a-Other")],
+      [row("Divvys Preview")],
+    );
+    expect(status).toEqual({ "Divvy's Preview": true, Other: false });
+  });
+
+  it("gives packages the catalog lacks a placeholder card", () => {
+    const catalog = [catalogMod("Steamodded")];
+    const installed = [
+      row("Steamodded"),
+      tsRow("Multiplayer", "BalatroMultiplayer-Multiplayer"),
+    ];
+    const out = reconcileInstalledPlaceholders(catalog, installed);
+    expect(titles(out)).toEqual(["Steamodded", "Multiplayer"]);
+    const placeholder = out[1];
+    expect(isInstalledPlaceholder(placeholder)).toBe(true);
+    expect(computeInstallationStatus(out, installed)).toEqual({
+      Steamodded: true,
+      Multiplayer: true,
+    });
+  });
+
+  it("keeps a Thunderstore card live for an index row the index dropped", () => {
+    const card = tsCard("JokerDisplay", "nh6574-JokerDisplay");
+    const installed = [row("JokerDisplay", true, "d3c022d")];
+    const out = reconcileInstalledPlaceholders([card], installed);
+    expect(out).toEqual([card]);
+    expect(out[0].orphaned).toBeFalsy();
+    expect(isBrowsableMod(out[0])).toBe(true);
+    expect(computeInstallationStatus(out, installed)).toEqual({
+      JokerDisplay: true,
+    });
+  });
+
+  it("does not add a placeholder for a package the catalog lists", () => {
+    const catalog = [
+      tsCard("Pokermon (PokermonPlus)", "PokermonPlus-Pokermon"),
+    ];
+    const out = reconcileInstalledPlaceholders(catalog, [
+      tsRow("Pokermon", "PokermonPlus-Pokermon"),
+    ]);
+    expect(out).toBe(catalog);
   });
 });
 

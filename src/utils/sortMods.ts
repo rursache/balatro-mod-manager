@@ -4,7 +4,12 @@ const byName = (a: Mod, b: Mod) =>
   a.title.localeCompare(b.title, undefined, { sensitivity: "base" }) ||
   (a._dirName ?? a.title).localeCompare(b._dirName ?? b.title);
 
-/** Returns a sorted copy, mods without a known update time always go last */
+const downloadsOf = (m: Mod) =>
+  typeof m.downloads === "number" && Number.isFinite(m.downloads)
+    ? m.downloads
+    : null;
+
+/** Returns a sorted copy, mods without a known update time or download count always go last */
 export function sortMods(mods: Mod[], sort: SortOption): Mod[] {
   const out = [...mods];
   switch (sort) {
@@ -25,6 +30,16 @@ export function sortMods(mods: Mod[], sort: SortOption): Mod[] {
         return (au - bu) * dir || byName(a, b);
       });
     }
+    case SortOption.DownloadsDesc:
+      return out.sort((a, b) => {
+        const ad = downloadsOf(a);
+        const bd = downloadsOf(b);
+        if (ad === null || bd === null) {
+          if (ad !== bd) return ad === null ? 1 : -1;
+          return byName(a, b);
+        }
+        return bd - ad || byName(a, b);
+      });
     default:
       return out;
   }

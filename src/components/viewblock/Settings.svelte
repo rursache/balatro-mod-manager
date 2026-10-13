@@ -27,6 +27,24 @@
   import { cardScale, darkMode } from "../../stores/ui";
   import { browser } from "$app/environment";
   import { modal } from "../../utils/modalStack";
+  import {
+    hideAiGeneratedMods,
+    showDeprecatedMods,
+    showNsfwMods,
+    sourceFilter,
+    thunderstoreEnabled,
+  } from "../../stores/catalogFilters";
+  import type { Writable } from "svelte/store";
+
+  function toggleStore(store: Writable<boolean>) {
+    store.update((value) => !value);
+  }
+
+  function handleThunderstoreChange() {
+    toggleStore(thunderstoreEnabled);
+    // The Thunderstore chip filters everything out once the source is off
+    if (!$thunderstoreEnabled) sourceFilter.set("all");
+  }
 
   let isReindexing = $state(false);
   let isClearingCache = $state(false);
@@ -549,6 +567,76 @@
           </p>
         {/if}
       </div>
+      <h3>Catalog</h3>
+      <div class="console-settings">
+        <span class="label-text">Thunderstore Mods</span>
+        <div class="switch-container">
+          <label class="switch">
+            <input
+              type="checkbox"
+              aria-label="Thunderstore Mods"
+              checked={$thunderstoreEnabled}
+              onchange={handleThunderstoreChange}
+            /> <span class="slider"></span>
+          </label>
+        </div>
+      </div>
+      <p class="description-small">
+        List mods from the Balatro community on Thunderstore next to the mod
+        index. When off, mods listed by both install from the index
+      </p>
+      <div class="console-settings">
+        <span class="label-text">Show NSFW Mods</span>
+        <div class="switch-container">
+          <label class="switch">
+            <input
+              type="checkbox"
+              aria-label="Show NSFW Mods"
+              checked={$showNsfwMods}
+              onchange={() => toggleStore(showNsfwMods)}
+            /> <span class="slider"></span>
+          </label>
+        </div>
+      </div>
+      <p class="description-small">
+        Thunderstore packages marked NSFW are hidden while browsing unless this
+        is on
+      </p>
+      <div class="console-settings">
+        <span class="label-text">Hide AI Generated Mods</span>
+        <div class="switch-container">
+          <label class="switch">
+            <input
+              type="checkbox"
+              aria-label="Hide AI Generated Mods"
+              checked={$hideAiGeneratedMods}
+              onchange={() => toggleStore(hideAiGeneratedMods)}
+            /> <span class="slider"></span>
+          </label>
+        </div>
+      </div>
+      <p class="description-small">
+        Packages tagged AI Generated are shown with a badge, turn this on to
+        hide them
+      </p>
+      <div class="console-settings">
+        <span class="label-text">Show Deprecated Mods</span>
+        <div class="switch-container">
+          <label class="switch">
+            <input
+              type="checkbox"
+              aria-label="Show Deprecated Mods"
+              checked={$showDeprecatedMods}
+              onchange={() => toggleStore(showDeprecatedMods)}
+            /> <span class="slider"></span>
+          </label>
+        </div>
+      </div>
+      <p class="description-small">
+        Deprecated packages stay hidden while browsing, installed ones always
+        show in Installed Mods with a badge
+      </p>
+
       <h3>Appearance</h3>
       <div class="console-settings">
         <span class="label-text">Enable Dark Mode</span>

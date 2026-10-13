@@ -64,6 +64,29 @@ describe("requestThumbnail", () => {
     await expect(b.promise).resolves.toBe("/cache/a.jpg");
   });
 
+  it("keys requests by catalog id so same named mods never share art", () => {
+    mockInvoke.mockImplementation((cmd: string) =>
+      cmd === "fetch_thumbnail" ? new Promise(() => {}) : Promise.resolve(),
+    );
+
+    const index = requestThumbnail("Pokermon", URL, "InertSteak@Pokermon");
+    requestThumbnail("Pokermon", URL, "ts:PokermonPlus-Pokermon");
+    requestThumbnail("Pokermon", URL, "InertSteak@Pokermon");
+    expect(callsTo("fetch_thumbnail")).toEqual([
+      [
+        "fetch_thumbnail",
+        { title: "Pokermon", id: "InertSteak@Pokermon", url: URL },
+      ],
+      [
+        "fetch_thumbnail",
+        { title: "Pokermon", id: "ts:PokermonPlus-Pokermon", url: URL },
+      ],
+    ]);
+
+    index.release();
+    expect(callsTo("cancel_thumbnail")).toHaveLength(0);
+  });
+
   it("cancels only after every card scrolled away", () => {
     mockInvoke.mockImplementation((cmd: string) =>
       cmd === "fetch_thumbnail" ? new Promise(() => {}) : Promise.resolve(),

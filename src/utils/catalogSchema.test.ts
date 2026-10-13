@@ -31,6 +31,22 @@ describe("ensureCatalogSchema", () => {
     expect(storage.getItem("catalog-schema")).toBe(CATALOG_SCHEMA);
   });
 
+  it("drops the index only catalog cached before Thunderstore merging", () => {
+    const storage = memoryStorage({
+      "catalog-schema": "github:kasimeka/balatro-mod-index@main#1",
+      "mods-cache": "[]",
+      "mods-cache-ts": "1",
+      "mods-descriptions-cache": "{}",
+      "catalog.showNsfw": "true",
+    });
+    expect(CATALOG_SCHEMA).toContain("thunderstore");
+    expect(ensureCatalogSchema(storage)).toBe(true);
+    expect(storage.getItem("mods-cache")).toBeNull();
+    expect(storage.getItem("mods-descriptions-cache")).toBeNull();
+    expect(storage.getItem("catalog.showNsfw")).toBe("true");
+    expect(storage.getItem("catalog-schema")).toBe(CATALOG_SCHEMA);
+  });
+
   it("is idempotent", () => {
     const storage = memoryStorage();
     ensureCatalogSchema(storage);

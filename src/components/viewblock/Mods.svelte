@@ -14,8 +14,10 @@
     Folder,
     RefreshCw,
     X,
+    Users,
   } from "lucide-svelte";
   import ModView from "./ModView.svelte";
+  import MultiplayerView from "./MultiplayerView.svelte";
   import { fly } from "svelte/transition";
   import {
     SortOption,
@@ -105,6 +107,35 @@
   import { mapWithConcurrency } from "../../utils/concurrency";
   import { fuzzyFilter } from "../../utils/fuzzy";
   import { sortMods } from "../../utils/sortMods";
+  import { mapCategories } from "../../utils/categories";
+  import {
+    catalogSourceFields,
+    uniqueCatalogTitles,
+    usesCatalogInstall,
+    type ArchiveModItem,
+  } from "../../utils/catalogItems";
+  import {
+    formatSyncStatus,
+    passesCatalogFilters,
+    syncHasProblem,
+  } from "../../utils/catalogFilters";
+  import {
+    catalogStatusStore,
+    hideAiGeneratedMods,
+    showDeprecatedMods,
+    showNsfwMods,
+    sourceFilter,
+    thunderstoreEnabled,
+    type CatalogStatus,
+    type SourceFilter,
+  } from "../../stores/catalogFilters";
+  import { installCatalogEntry } from "../../stores/catalogInstall";
+  import {
+    computeInstallationStatus,
+    findInstalledRow,
+    indexInstalledRows,
+  } from "../../utils/installedPlaceholders";
+  import { installedModsCache } from "../../stores/modCache";
 
   /** Max parallel mod-update invocations to keep the Tauri IPC queue healthy. */
   const UPDATE_ALL_CONCURRENCY = 6;
@@ -667,23 +698,8 @@
         try {
           const installed = await fetchCachedMods();
           syncInstalledPlaceholders(installed);
-          // Create a set of normalized installed mod names for fuzzy matching
-          const installedNormalized = new Set(
-            installed.map((mod) => normalizeModName(mod.name)),
-          );
-          // Also keep exact lowercase names for exact matching
-          const installedExact = new Set(
-            installed.map((mod) => mod.name.toLowerCase()),
-          );
           installationStatus.set(
-            Object.fromEntries(
-              $modsStore.map((mod) => [
-                mod.title,
-                // Check exact match first, then normalized match
-                installedExact.has(mod.title.toLowerCase()) ||
-                  installedNormalized.has(normalizeModName(mod.title)),
-              ]),
-            ),
+            computeInstallationStatus($modsStore, installed),
           );
         } catch (error) {
           console.error("Install status check failed:", error);
@@ -854,8 +870,9 @@
     );
     try {
       await getAllInstalledMods();
-      const installedMod = installedMods.find(
-        (m) => m.name.toLowerCase() === mod.title.toLowerCase(),
+      const installedMod = findInstalledRow(
+        mod,
+        indexInstalledRows(installedMods),
       );
       if (isCoreMod) {
         // Get dependents
@@ -874,7 +891,7 @@
         // For non-core mods
         if (!installedMod) return;
         await invoke("remove_installed_mod", {
-          name: mod.title,
+          name: installedMod.name,
           path: installedMod.path,
         });
         installationStatus.update((s) => ({
@@ -969,6 +986,10 @@
                 "get_latest_steamodded_release",
               );
               await installModFromURL(mod, latestReleaseURL);
+            } else if (usesCatalogInstall(mod)) {
+              loadingStates2.update((s) => ({ ...s, [mod.title]: false }));
+              const ok = await installCatalogEntry(mod, { prompt: false });
+              if (!ok) throw new Error("see the previous error");
             } else if (mod.downloadURL) {
               const folderName =
                 mod.folderName || mod.title.replace(/\s+/g, "");
@@ -1116,6 +1137,12 @@
   }
 
   const installMod = async (mod: Mod) => {
+    if (usesCatalogInstall(mod)) {
+      await installCatalogEntry(mod, {
+        source: installSourceFor(mod),
+      });
+      return;
+    }
     if (!mod?.title || !mod?.downloadURL) return;
     // Guard: don't allow re-entrancy while already loading
     if ($loadingStates2[mod.title]) return;
@@ -1229,31 +1256,10 @@
     }
   };
 
-  interface ModMeta {
-    title: string;
-    "requires-steamodded": boolean;
-    "requires-talisman": boolean;
-    requires_steamodded?: boolean;
-    requires_talisman?: boolean;
-    categories: string[];
-    author: string;
-    repo: string;
-    downloadURL?: string;
-    folderName?: string;
-    version?: string;
-    "last-updated"?: number;
-  }
-
-  // Do not depend on cache for catalog; prefer fresh data + lazy UI
-  const CACHE_DURATION = 0;
-
-  // Types returned by the single-archive Tauri command
-  interface ArchiveModItem {
-    dir_name: string;
-    meta: ModMeta;
-    description: string;
-    image_url: string;
-    has_thumbnail?: boolean;
+  /** With Thunderstore turned off new installs of merged mods come from the index */
+  function installSourceFor(mod: Mod): "index" | null {
+    if ($thunderstoreEnabled || mod.source !== "merged") return null;
+    return $installationStatus[mod.title] ? null : "index";
   }
 
   interface CachedModItem {
@@ -1277,19 +1283,23 @@
     items: ArchiveModItem[],
     cachedMap?: Record<string, string>,
   ): Mod[] {
+    const titles = uniqueCatalogTitles(items);
     return items.map((item) => {
-      const mappedCategories = item.meta.categories
-        .map((cat) => categoryMap[cat] ?? null)
-        .filter((cat): cat is Category => cat !== null);
-
-      const cachedThumb = cachedMap?.[item.meta.title];
+      const fields = catalogSourceFields(item);
+      const title = titles.get(item.dir_name) ?? item.meta.title;
+      // Thumbnails are keyed by catalog id, index art cached before that is keyed by title
+      const cachedThumb =
+        cachedMap?.[item.dir_name] ??
+        (fields.source !== "thunderstore"
+          ? cachedMap?.[item.meta.title]
+          : undefined);
       const img = cachedThumb
         ? (toAssetUrl(cachedThumb) ?? "/images/cover.jpg")
         : "/images/cover.jpg";
       const hasThumb = item.has_thumbnail === true;
       return {
         id: item.dir_name,
-        title: item.meta.title,
+        title,
         description: item.description,
         image: img,
         imageFallback: cachedThumb ? img : undefined,
@@ -1299,7 +1309,7 @@
             : undefined,
         _hasThumbnail: hasThumb,
         colors: getRandomColorPair(),
-        categories: mappedCategories,
+        categories: mapCategories(item.meta.categories),
         requires_steamodded:
           item.meta["requires-steamodded"] ??
           item.meta.requires_steamodded ??
@@ -1316,6 +1326,7 @@
         installed: false,
         last_updated: item.meta["last-updated"] ?? 0,
         _dirName: item.dir_name,
+        ...fields,
       };
     });
   }
@@ -1408,10 +1419,17 @@
     }
 
     const titles = items.map((i) => i.meta.title);
+    const thumbKeys = [
+      ...items.map((i) => i.dir_name),
+      ...items
+        .filter((i) => i.source !== "thunderstore")
+        .map((i) => i.meta.title),
+    ];
     const cachedMap = await invoke<Record<string, string>>(
       "get_cached_thumbnails_map",
-      { titles },
+      { titles: thumbKeys },
     );
+    void refreshCatalogStatus();
 
     const mods: Mod[] = mapArchiveItems(items, cachedMap);
     const prunedCount = mergeIncomingMods(mods);
@@ -1432,9 +1450,18 @@
       skipped: boolean;
       changed: string[];
       orphan_total: number;
+      deprecated?: string[];
     }>("reconcile_orphan_mods", { remoteTitles: titles })
       .then(async (res) => {
-        if (!res || res.skipped) return;
+        if (!res) return;
+        const deprecated = res.deprecated ?? [];
+        if (showMessages && deprecated.length > 0) {
+          addMessage(
+            `${deprecated.length} installed mod${deprecated.length === 1 ? " is" : "s are"} deprecated on Thunderstore: ${deprecated.join(", ")}`,
+            "warning",
+          );
+        }
+        if (res.skipped) return;
         // Pull the fresh orphan flags so dropped mods keep an Installed card
         await seedInstalledPlaceholders(true);
         if (res.changed.length === 0) return;
@@ -1497,6 +1524,51 @@
     }
   }
 
+  async function refreshCatalogStatus() {
+    try {
+      catalogStatusStore.set(await invoke<CatalogStatus>("catalog_status"));
+    } catch (_) {
+      // the status line is optional
+    }
+  }
+
+  // Ticks so "synced 5m ago" stays current
+  let statusNow = $state(Date.now());
+  let syncStatusLine = $derived(
+    formatSyncStatus($catalogStatusStore, statusNow, $thunderstoreEnabled),
+  );
+  let syncProblem = $derived(
+    syncHasProblem($catalogStatusStore, $thunderstoreEnabled),
+  );
+  let syncErrors = $derived(
+    [
+      $catalogStatusStore?.index.error,
+      $thunderstoreEnabled ? $catalogStatusStore?.thunderstore.error : null,
+    ]
+      .filter(Boolean)
+      .join("\n"),
+  );
+
+  const sourceChips: { value: SourceFilter; label: string }[] = [
+    { value: "all", label: "All" },
+    { value: "index", label: "Index" },
+    { value: "thunderstore", label: "Thunderstore" },
+  ];
+
+  function selectSource(value: SourceFilter) {
+    sourceFilter.set(value);
+    currentPage.set(1);
+    startPage = 1;
+  }
+
+  onMount(() => {
+    void refreshCatalogStatus();
+    const timer = window.setInterval(() => {
+      statusNow = Date.now();
+    }, 60_000);
+    return () => clearInterval(timer);
+  });
+
   async function refreshCatalogInBackground(
     showMessages: boolean = true,
   ): Promise<void> {
@@ -1510,6 +1582,7 @@
       await loadCatalogCore({ showMessages, isForeground: false });
     } catch (error) {
       console.error("Failed to refresh catalog:", error);
+      void refreshCatalogStatus();
       if (isRateLimitError(error)) {
         scheduleCatalogRetry("background", showMessages);
         return;
@@ -1534,6 +1607,7 @@
     try {
       await loadCatalogCore({ showMessages: false, isForeground: true });
     } catch (error) {
+      void refreshCatalogStatus();
       if (isRateLimitError(error)) {
         scheduleCatalogRetry("foreground", true);
       } else {
@@ -1870,6 +1944,7 @@
     { name: "Technical", icon: Spade },
     { name: "Resource Packs", icon: FolderHeart },
     { name: "API", icon: Gamepad2 },
+    { name: "Multiplayer", icon: Users },
   ];
 
   const colorPairs = [
@@ -1886,28 +1961,6 @@
     { color1: "#748C8A", color2: "#627775" },
   ];
 
-  const categoryMap: Record<string, Category> = {
-    Content: Category.Content,
-    content: Category.Content,
-    Joker: Category.Joker,
-    joker: Category.Joker,
-    "Quality of Life": Category.QualityOfLife,
-    "quality of life": Category.QualityOfLife,
-    Technical: Category.Technical,
-    technical: Category.Technical,
-    Miscellaneous: Category.Miscellaneous,
-    miscellaneous: Category.Miscellaneous,
-    "Resource Packs": Category.ResourcePacks,
-    "resource packs": Category.ResourcePacks,
-    Resources: Category.ResourcePacks,
-    resources: Category.ResourcePacks,
-    API: Category.API,
-    api: Category.API,
-    // Newer schema category without its own tab yet
-    Extension: Category.API,
-    extension: Category.API,
-  };
-
   function getRandomColorPair() {
     return colorPairs[Math.floor(Math.random() * colorPairs.length)];
   }
@@ -1919,10 +1972,24 @@
   let showSearch = $derived($currentCategory === "Search");
   $currentCategory = "All Mods";
 
+  let catalogFilterOptions = $derived({
+    thunderstoreEnabled: $thunderstoreEnabled,
+    showNsfw: $showNsfwMods,
+    hideAiGenerated: $hideAiGeneratedMods,
+    showDeprecated: $showDeprecatedMods,
+    source: $thunderstoreEnabled ? $sourceFilter : ("all" as SourceFilter),
+  });
+
   let filteredMods = $derived(
     $modsStore.filter((mod) => {
       // Orphaned and placeholder cards only belong to Installed Mods
       if ($currentCategory !== "Installed Mods" && !isBrowsableMod(mod)) {
+        return false;
+      }
+      if (
+        $currentCategory !== "Installed Mods" &&
+        !passesCatalogFilters(mod, catalogFilterOptions)
+      ) {
         return false;
       }
       switch ($currentCategory) {
@@ -2070,6 +2137,7 @@
     { value: SortOption.NameDesc, label: "Name (Z-A)" },
     { value: SortOption.LastUpdatedDesc, label: "Last Updated" },
     { value: SortOption.LastUpdatedAsc, label: "Oldest Updated" },
+    { value: SortOption.DownloadsDesc, label: "Most Downloads" },
   ];
 
   function getCurrentSortLabel(): string {
@@ -2382,6 +2450,13 @@
       missing.sort((a, b) => priority(a.title) - priority(b.title));
 
       const installModSilently = async (mod: Mod) => {
+        if (usesCatalogInstall(mod)) {
+          await installCatalogEntry(mod, {
+            prompt: false,
+            source: installSourceFor(mod),
+          });
+          return;
+        }
         if (!mod?.title || !mod?.downloadURL) return;
         loadingStates2.update((s) => ({ ...s, [mod.title]: true }));
         const folderName = mod.folderName || mod.title.replace(/\s+/g, "");
@@ -2795,28 +2870,17 @@
         catalogTitles: paginatedMods.map((m) => m.title),
       });
 
+      // The summary has no source info, take it from the cached DB rows
+      const cachedRows = new Map(
+        get(installedModsCache).map((row) => [row.name, row]),
+      );
       installedMods = summary.installed.map((m) => ({
+        ...cachedRows.get(m.name),
         name: m.name,
         path: m.path,
       }));
-
-      // Create a set of normalized installed mod names for fuzzy matching
-      const installedNormalized = new Set(
-        summary.installed.map((m) => normalizeModName(m.name)),
-      );
-      // Also keep exact lowercase names for exact matching
-      const installedExact = new Set(
-        summary.installed.map((m) => m.name.toLowerCase()),
-      );
       installationStatus.set(
-        Object.fromEntries(
-          $modsStore.map((mod) => [
-            mod.title,
-            // Check exact match first, then normalized match
-            installedExact.has(mod.title.toLowerCase()) ||
-              installedNormalized.has(normalizeModName(mod.title)),
-          ]),
-        ),
+        computeInstallationStatus($modsStore, installedMods),
       );
       modEnabledStore.set(summary.enabled || {});
       updateAvailableStore.set(summary.updates || {});
@@ -2905,7 +2969,11 @@
 
     <div class="separator"></div>
 
-    {#if $modsStore.length === 0 && (isLoading || $catalogLoading || catalogRetryPending) && $currentCategory !== "Installed Mods"}
+    {#if $currentCategory === "Multiplayer"}
+      <div class="mods-wrapper multiplayer-wrapper default-scrollbar">
+        <MultiplayerView />
+      </div>
+    {:else if $modsStore.length === 0 && (isLoading || $catalogLoading || catalogRetryPending) && $currentCategory !== "Installed Mods"}
       <div class="loading-container">
         <p class="loading-text">
           Loading mods{".".repeat($loadingDots)}
@@ -3122,6 +3190,43 @@
               </div>
             {/if}
 
+            {#if $currentCategory !== "Installed Mods" && !$currentModView}
+              <div
+                class="catalog-toolbar"
+                in:fly={{ duration: 400, y: 10, opacity: 0.2 }}
+              >
+                {#if $thunderstoreEnabled}
+                  <div
+                    class="source-chips"
+                    role="group"
+                    aria-label="Catalog source"
+                  >
+                    {#each sourceChips as chip (chip.value)}
+                      <button
+                        type="button"
+                        class="source-chip"
+                        class:active={$sourceFilter === chip.value}
+                        aria-pressed={$sourceFilter === chip.value}
+                        onclick={() => selectSource(chip.value)}
+                      >
+                        {chip.label}
+                      </button>
+                    {/each}
+                  </div>
+                {/if}
+                {#if syncStatusLine}
+                  <span
+                    class="sync-status"
+                    class:problem={syncProblem}
+                    title={syncErrors || undefined}
+                    data-testid="sync-status"
+                  >
+                    {syncStatusLine}
+                  </span>
+                {/if}
+              </div>
+            {/if}
+
             <div
               class="sort-controls"
               in:fly={{ duration: 400, y: 10, opacity: 0.2 }}
@@ -3225,6 +3330,7 @@
           class="mods-scroll-container default-scrollbar"
           class:no-local-mods={localMods.length === 0}
           class:installed-view={$currentCategory === "Installed Mods"}
+          class:browse-view={$currentCategory !== "Installed Mods"}
           bind:this={modsScrollContainer}
           onscroll={handleModsScroll}
         >
@@ -3781,6 +3887,65 @@
     display: flex;
     align-items: center;
     gap: 0.5rem;
+  }
+
+  .catalog-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    min-width: 0;
+    max-width: calc(100% - 16rem);
+  }
+
+  .source-chips {
+    display: flex;
+    gap: 0.35rem;
+    flex-shrink: 0;
+  }
+
+  .source-chip {
+    background: var(--ui-mod-chip-bg);
+    border: 2px solid var(--ui-mod-chip-border);
+    color: var(--ui-mod-chip-text);
+    font-family: "M6X11", sans-serif;
+    font-size: 0.95rem;
+    padding: 0.35rem 0.7rem;
+    border-radius: 6px;
+    cursor: pointer;
+    transition:
+      background 0.2s ease,
+      color 0.2s ease;
+  }
+
+  .source-chip:hover,
+  .source-chip.active {
+    background: var(--ui-mod-chip-active-bg);
+    color: var(--ui-mod-chip-active-text);
+  }
+
+  .sync-status {
+    font-family: "M6X11", sans-serif;
+    font-size: 0.85rem;
+    color: var(--ui-text);
+    opacity: 0.75;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    min-width: 0;
+  }
+
+  .sync-status.problem {
+    color: var(--ui-warning, #fdcf51);
+    opacity: 1;
+  }
+
+  .multiplayer-wrapper {
+    overflow-y: auto;
+  }
+
+  /* Room for the source chips and sync line above the first card row */
+  .mods-scroll-container.browse-view {
+    padding-top: 2.75rem;
   }
 
   .installed-search-wrapper {

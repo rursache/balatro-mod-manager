@@ -1,6 +1,14 @@
 <script lang="ts">
   import type { Mod } from "../../stores/modStore";
-  import { Download, Trash2, RefreshCw, Layers, Check } from "lucide-svelte";
+  import {
+    Download,
+    Trash2,
+    RefreshCw,
+    Layers,
+    Check,
+    User,
+    ArrowDownToLine,
+  } from "lucide-svelte";
   import {
     installationStatus,
     loadingStates2 as loadingStates,
@@ -23,6 +31,7 @@
   import { rowPreloadMargin } from "../../utils/thumbnailRequests";
   import { onMount, onDestroy } from "svelte";
   import { isLinuxPlatform } from "$lib/platform";
+  import { formatDownloads } from "../../utils/catalogFilters";
 
   interface Props {
     mod: Mod;
@@ -61,6 +70,14 @@
   let titleEl: HTMLHeadingElement | null = $state(null);
   let titleScale = $state(1);
   let unobserveTitle: (() => void) | null = null;
+  let downloadsLabel = $derived(formatDownloads(mod.downloads));
+  let sourceBadges = $derived(
+    mod.source === "merged"
+      ? ["index", "thunderstore"]
+      : mod.source === "thunderstore"
+        ? ["thunderstore"]
+        : [],
+  );
   let cardColors = $derived(
     $darkMode ? pickDarkPalette(mod.title) : normalizeColorPair(mod.colors),
   );
@@ -372,6 +389,7 @@
       fallbackSrc={mod.imageFallback || "/images/cover.jpg"}
       alt={mod.title}
       cacheTitle={mod.title}
+      cacheId={mod._dirName}
       remoteSrc={mod.thumbnailUrl}
       rootMargin={rowPreloadMargin($cardScale)}
       deferLoad={deferImages}
@@ -379,6 +397,59 @@
       on:load={handleThumbDone}
       on:error={handleThumbDone}
     />
+
+    {#if sourceBadges.length > 0 || mod.deprecated || mod.aiGenerated || mod.nsfw}
+      <div class="badges" data-testid="mod-badges">
+        {#each sourceBadges as source (source)}
+          <span
+            class="badge source {source}"
+            title={source === "thunderstore"
+              ? "Listed on Thunderstore"
+              : "Listed in the mod index"}
+          >
+            {source === "thunderstore" ? "Thunderstore" : "Index"}
+          </span>
+        {/each}
+        {#if mod.deprecated}
+          <span
+            class="badge deprecated"
+            title="Deprecated by its author on Thunderstore"
+          >
+            Deprecated
+          </span>
+        {/if}
+        {#if mod.aiGenerated}
+          <span class="badge ai" title="Tagged AI Generated on Thunderstore">
+            AI
+          </span>
+        {/if}
+        {#if mod.nsfw}
+          <span class="badge nsfw" title="Marked NSFW on Thunderstore">
+            NSFW
+          </span>
+        {/if}
+      </div>
+    {/if}
+
+    {#if !mod.orphaned && (mod.publisher || downloadsLabel)}
+      <div class="meta-tags">
+        {#if mod.publisher}
+          <span class="tag meta-owner" title={`By ${mod.publisher}`}>
+            <User size={11} />
+            <span class="meta-text">{mod.publisher}</span>
+          </span>
+        {/if}
+        {#if downloadsLabel}
+          <span
+            class="tag meta-downloads"
+            title={`${mod.downloads?.toLocaleString()} downloads on Thunderstore`}
+          >
+            <ArrowDownToLine size={11} />
+            {downloadsLabel}
+          </span>
+        {/if}
+      </div>
+    {/if}
 
     <div class="tags">
       {#if mod.orphaned}
@@ -576,6 +647,91 @@
     letter-spacing: 0.02em;
     text-transform: uppercase;
     backdrop-filter: blur(2px);
+  }
+
+  .badges {
+    position: absolute;
+    top: 0.35rem;
+    right: 0.35rem;
+    left: 2.4rem;
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 0.3rem;
+    pointer-events: none;
+  }
+
+  .badge {
+    font-family: "M6X11", monospace;
+    font-size: calc(0.72rem * var(--card-scale, 1));
+    padding: 0.2rem 0.4rem;
+    border-radius: 4px;
+    line-height: 1;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+    color: #fff;
+    border: 1px solid rgba(255, 255, 255, 0.25);
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
+    pointer-events: auto;
+  }
+
+  .badge.source.index {
+    background: rgba(20, 20, 20, 0.72);
+  }
+
+  .badge.source.thunderstore {
+    background: rgba(35, 87, 140, 0.92);
+  }
+
+  .badge.deprecated {
+    background: rgba(192, 64, 56, 0.92);
+  }
+
+  .badge.ai {
+    background: rgba(121, 110, 158, 0.95);
+  }
+
+  .badge.nsfw {
+    background: rgba(160, 40, 90, 0.95);
+  }
+
+  .meta-tags {
+    position: absolute;
+    top: 7.2rem;
+    left: 0.35rem;
+    display: flex;
+    gap: 0.3rem;
+    max-width: 55%;
+    min-width: 0;
+  }
+
+  .meta-tags .tag {
+    font-family: "M6X11", monospace;
+    font-size: calc(0.75rem * var(--card-scale, 1));
+    padding: 0.2rem 0.45rem;
+    border-radius: 4px;
+    line-height: 1;
+    letter-spacing: 0.02em;
+    backdrop-filter: blur(2px);
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    background: rgba(20, 20, 20, 0.72);
+    color: #fff;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
+    text-transform: none;
+    min-width: 0;
+  }
+
+  .meta-owner .meta-text {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .meta-downloads {
+    flex-shrink: 0;
   }
 
   .tag.orphaned {

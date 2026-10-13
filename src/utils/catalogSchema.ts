@@ -1,10 +1,12 @@
-export const CATALOG_SCHEMA = "github:kasimeka/balatro-mod-index@main#1";
+export const CATALOG_SCHEMA =
+  "github:kasimeka/balatro-mod-index@main+thunderstore:balatro#2";
 
 const SCHEMA_KEY = "catalog-schema";
 const STALE_KEYS = ["mods-cache", "mods-cache-ts", "mods-descriptions-cache"];
 
 /**
- * Drops catalog caches written for another catalog source (the old BMI server)
+ * Drops catalog caches written for another catalog shape (the old BMI server, or
+ * the index only catalog before Thunderstore was merged in)
  * Returns true when caches were cleared
  */
 export function ensureCatalogSchema(storage?: Storage): boolean {

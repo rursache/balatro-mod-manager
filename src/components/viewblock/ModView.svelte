@@ -8,6 +8,8 @@
     ArrowLeft,
     RefreshCw,
     Layers,
+    ExternalLink,
+    ArrowDownToLine,
   } from "lucide-svelte";
   import Github from "../GithubIcon.svelte";
   import LastUpdated from "./LastUpdated.svelte";
@@ -31,11 +33,7 @@
   import { lovelyPopupStore } from "../../stores/modStore";
   import { modsStore } from "../../stores/modStore";
   import { untrack } from "svelte";
-  import {
-    checkModInCache,
-    fetchCachedMods,
-    forceRefreshCache,
-  } from "../../stores/modCache";
+  import { fetchCachedMods, forceRefreshCache } from "../../stores/modCache";
   import { descriptionsStore, setDescription } from "../../stores/descriptions";
   import LazyImage from "../common/LazyImage.svelte";
   import { isLinuxPlatform } from "$lib/platform";
@@ -49,6 +47,27 @@
   } from "../../stores/collections";
   import { get } from "svelte/store";
   import CustomDropdown from "../CustomDropdown.svelte";
+  import { categoryLabel } from "../../utils/categories";
+  import { usesCatalogInstall } from "../../utils/catalogItems";
+  import { formatDownloads } from "../../utils/catalogFilters";
+  import { sanitizeHtml } from "../../utils/sanitizeHtml";
+  import {
+    computeInstallationStatus,
+    findInstalledRow,
+    indexInstalledRows,
+  } from "../../utils/installedPlaceholders";
+  import {
+    dependencySteps,
+    installCatalogEntry,
+    planCatalogInstall,
+    type InstallPlan,
+  } from "../../stores/catalogInstall";
+  import { thunderstoreEnabled } from "../../stores/catalogFilters";
+  import type {
+    CatalogSource,
+    InstallSourceName,
+    ThunderstoreInfo,
+  } from "../../stores/modStore";
 
   // Configure marked options
   marked.use({
@@ -79,26 +98,7 @@
     }
   }
 
-  function getCategoryName(category: number): string {
-    switch (category) {
-      case 0:
-        return "Content";
-      case 1:
-        return "Joker";
-      case 2:
-        return "Quality of Life";
-      case 3:
-        return "Technical";
-      case 4:
-        return "Miscellaneous";
-      case 5:
-        return "Resource Packs";
-      case 6:
-        return "API";
-      default:
-        return "All Mods";
-    }
-  }
+  const getCategoryName = categoryLabel;
 
   let installedMods: InstalledMod[] = [];
   let steamoddedVersions = $state<string[]>([]);
@@ -174,6 +174,9 @@
     requires_steamodded: boolean;
     requires_talisman: boolean;
     repo_url: string | null;
+    source?: CatalogSource;
+    thunderstore?: ThunderstoreInfo | null;
+    downloads?: number | null;
   }
 
   // Track which mods have already been hydrated to avoid duplicate calls
@@ -206,12 +209,20 @@
         }
       }
 
+      // Thunderstore fields only overwrite when the backend sent them
+      const tsFields: Partial<Mod> = {};
+      if (details.thunderstore) tsFields.thunderstore = details.thunderstore;
+      if (typeof details.downloads === "number") {
+        tsFields.downloads = details.downloads;
+      }
+
       // Update requirements and repo URL in store
       modsStore.update((arr) =>
         arr.map((m) =>
           m.title === modTitle
             ? {
                 ...m,
+                ...tsFields,
                 requires_steamodded: details.requires_steamodded,
                 requires_talisman: details.requires_talisman,
                 repo: details.repo_url ?? m.repo,
@@ -225,6 +236,7 @@
       if (currentView?.title === modTitle) {
         currentModView.set({
           ...mod,
+          ...tsFields,
           description: details.description || mod.description,
           requires_steamodded: details.requires_steamodded,
           requires_talisman: details.requires_talisman,
@@ -519,8 +531,9 @@
 
     try {
       await getAllInstalledMods();
-      const installedMod = installedMods.find(
-        (m) => m.name.toLowerCase() === mod.title.toLowerCase(),
+      const installedMod = findInstalledRow(
+        mod,
+        indexInstalledRows(installedMods),
       );
 
       if (isCoreMod) {
@@ -540,7 +553,7 @@
       } else {
         if (!installedMod) return;
         await invoke("remove_installed_mod", {
-          name: mod.title,
+          name: installedMod.name,
           path: installedMod.path,
         });
         installationStatus.update((s) => ({
@@ -570,6 +583,16 @@
   };
 
   const installMod = async (mod: Mod, isUpdate = false) => {
+    if (usesCatalogInstall(mod)) {
+      const installed = await installCatalogEntry(mod, {
+        source: pickerSource(mod, isUpdate),
+      });
+      if (installed) {
+        await getAllInstalledMods();
+        refreshTrackedSource();
+      }
+      return;
+    }
     // Guard: don't allow re-entrancy while already loading
     if ($loadingStates[mod.title]) return;
     // Set loading immediately to prevent double-clicks
@@ -908,7 +931,8 @@
   const isModInstalled = async (mod: Mod) => {
     if (!mod) return false;
 
-    const status = await checkModInCache(mod.title);
+    const rows = await fetchCachedMods();
+    const status = Boolean(findInstalledRow(mod, indexInstalledRows(rows)));
 
     // Update the store outside of the reactive context
     setTimeout(() => {
@@ -969,7 +993,7 @@
     }
     if (desc) {
       Promise.resolve(marked(desc)).then((result) => {
-        renderedDescription = result;
+        renderedDescription = sanitizeHtml(result);
       });
     }
   });
@@ -1112,13 +1136,8 @@
     // Ensure installation status is updated before component unmounts
     if ($currentCategory === "Installed Mods") {
       await getAllInstalledMods();
-      for (const mod of modsArray) {
-        const isInstalled = installedMods.some((m) => m.name === mod.title);
-        installationStatus.update((s) => ({
-          ...s,
-          [mod.title]: isInstalled,
-        }));
-      }
+      const status = computeInstallationStatus(modsArray, installedMods);
+      installationStatus.update((s) => ({ ...s, ...status }));
     }
   });
 
@@ -1173,6 +1192,95 @@
       checkModEnabled(mod.title);
     }
   });
+
+  // Thunderstore side: source picker for merged mods and the dependency plan
+  let isMerged = $derived(mod.source === "merged" && Boolean(mod.thunderstore));
+  let trackedSource = $state<InstallSourceName | null>(null);
+  let chosenSource = $state<InstallSourceName | null>(null);
+  let selectedSource = $derived<InstallSourceName>(
+    chosenSource ??
+      trackedSource ??
+      (mod.source === "thunderstore" ||
+      (mod.source === "merged" && $thunderstoreEnabled && !mod.deprecated)
+        ? "thunderstore"
+        : "index"),
+  );
+  let plan = $state<InstallPlan | null>(null);
+  let planError = $state<string | null>(null);
+  let planLoading = $state(false);
+  let planKey = "";
+  let downloadsLabel = $derived(formatDownloads(mod.downloads));
+  let packageUrl = $derived(mod.thunderstore?.package_url ?? "");
+  let planDependencies = $derived(plan ? dependencySteps(plan) : []);
+  let pickerModKey = "";
+
+  // The view is reused when another mod opens, start each one on its default source
+  $effect(() => {
+    const key = mod._dirName ?? mod.title;
+    if (key === pickerModKey) return;
+    pickerModKey = key;
+    chosenSource = null;
+    plan = null;
+    planError = null;
+  });
+
+  /** Explicit source for the backend, updates keep the tracked source unless the user switched */
+  function pickerSource(m: Mod, isUpdate: boolean): InstallSourceName | null {
+    if (m.source !== "merged") return null;
+    if (chosenSource) return chosenSource;
+    if (isUpdate || trackedSource) return null;
+    return $thunderstoreEnabled ? null : "index";
+  }
+
+  function refreshTrackedSource() {
+    const row = findInstalledRow(mod, indexInstalledRows(installedMods));
+    trackedSource = row
+      ? row.source === "thunderstore"
+        ? "thunderstore"
+        : "index"
+      : null;
+  }
+
+  async function loadPlan(m: Mod, source: InstallSourceName) {
+    const key = `${m._dirName}|${source}`;
+    if (key === planKey) return;
+    planKey = key;
+    planLoading = true;
+    planError = null;
+    try {
+      const next = await planCatalogInstall(m, {
+        source: m.source === "merged" ? source : null,
+      });
+      if (planKey === key) plan = next;
+    } catch (error) {
+      if (planKey === key) {
+        plan = null;
+        planError = error instanceof Error ? error.message : String(error);
+      }
+    } finally {
+      if (planKey === key) planLoading = false;
+    }
+  }
+
+  async function switchSource() {
+    if (!chosenSource || chosenSource === trackedSource) return;
+    await installMod(mod, true);
+  }
+
+  function openThunderstore() {
+    if (packageUrl) openExternal(packageUrl).catch(() => {});
+  }
+
+  $effect(() => {
+    const m = mod;
+    const source = selectedSource;
+    if (usesCatalogInstall(m)) void loadPlan(m, source);
+  });
+
+  $effect(() => {
+    void $installationStatus[mod.title];
+    getAllInstalledMods().then(refreshTrackedSource);
+  });
 </script>
 
 <svelte:window onkeydown={handleWindowKeydown} />
@@ -1205,6 +1313,7 @@
                 fallbackSrc={mod.imageFallback}
                 alt={mod.title}
                 cacheTitle={mod.title}
+                cacheId={mod._dirName}
                 remoteSrc={mod.thumbnailUrl}
                 hasThumbnail={mod._hasThumbnail !== false}
               />
@@ -1215,6 +1324,7 @@
               fallbackSrc={mod.imageFallback}
               alt={mod.title}
               cacheTitle={mod.title}
+              cacheId={mod._dirName}
               remoteSrc={mod.thumbnailUrl}
               hasThumbnail={mod._hasThumbnail !== false}
             />
@@ -1292,6 +1402,39 @@
           {/if}
         </div>
 
+        {#if isMerged}
+          <div class="source-picker" role="group" aria-label="Install source">
+            <span class="source-label">Source</span>
+            {#each ["thunderstore", "index"] as const as option (option)}
+              <button
+                type="button"
+                class="source-option"
+                class:active={selectedSource === option}
+                aria-pressed={selectedSource === option}
+                disabled={$loadingStates[mod.title]}
+                onclick={() => (chosenSource = option)}
+              >
+                {option === "thunderstore" ? "Thunderstore" : "Index"}
+                {#if trackedSource === option}
+                  <span class="source-current">installed</span>
+                {/if}
+              </button>
+            {/each}
+          </div>
+          {#if $installationStatus[mod.title] && trackedSource && chosenSource && chosenSource !== trackedSource}
+            <button
+              class="switch-source-button"
+              onclick={switchSource}
+              disabled={$loadingStates[mod.title]}
+            >
+              <RefreshCw size={16} />
+              Switch to {chosenSource === "thunderstore"
+                ? "Thunderstore"
+                : "the index"}
+            </button>
+          {/if}
+        {/if}
+
         {#if mod.title.toLowerCase() === "talisman" && !$installationStatus[mod.title]}
           <div class="version-selector">
             {#if loadingVersions}
@@ -1326,9 +1469,39 @@
         {/if}
         <div class="mod-stats">
           <span><User size={16} /> {mod.publisher}</span>
+          {#if mod.thunderstore?.owner && mod.thunderstore.owner !== mod.publisher}
+            <span title="Thunderstore owner">
+              <User size={16} />
+              {mod.thunderstore.owner}
+            </span>
+          {/if}
+          {#if downloadsLabel}
+            <span title="Downloads on Thunderstore">
+              <ArrowDownToLine size={16} />
+              {downloadsLabel}
+            </span>
+          {/if}
           <LastUpdated value={mod.last_updated} />
         </div>
-        {#if mod.repo || mod._dirName}
+        {#if mod.deprecated || mod.aiGenerated || mod.nsfw}
+          <div class="flag-badges">
+            {#if mod.deprecated}
+              <span class="flag-badge deprecated">Deprecated</span>
+            {/if}
+            {#if mod.aiGenerated}
+              <span class="flag-badge ai">AI Generated</span>
+            {/if}
+            {#if mod.nsfw}
+              <span class="flag-badge nsfw">NSFW</span>
+            {/if}
+          </div>
+        {/if}
+        {#if packageUrl}
+          <button onclick={openThunderstore} class="repo-button ts-button">
+            <ExternalLink size={16} /> View on Thunderstore
+          </button>
+        {/if}
+        {#if mod.repo || (mod._dirName && mod.source !== "thunderstore")}
           <button
             onclick={handleOpenRepo}
             class="repo-button"
@@ -1336,6 +1509,88 @@
           >
             <Github size={16} /> Repository
           </button>
+        {/if}
+
+        {#if usesCatalogInstall(mod)}
+          <div class="dependencies-section" data-testid="plan-dependencies">
+            <h3>Dependencies</h3>
+            {#if planLoading && !plan}
+              <p class="dep-empty">Checking dependencies...</p>
+            {:else if planError}
+              <p class="dep-empty">{planError}</p>
+            {:else if plan}
+              <ul class="dep-list">
+                {#each planDependencies as step (step.catalog_id)}
+                  <li>
+                    <span class="dep-name">{step.title}</span>
+                    <span class="dep-state missing">
+                      {step.installed_version
+                        ? `update to ${step.version}`
+                        : `installs ${step.version || "latest"}`}
+                    </span>
+                  </li>
+                {/each}
+                {#each plan.satisfied as dep (dep.full_name)}
+                  <li>
+                    <span class="dep-name">{dep.title}</span>
+                    <span class="dep-state ok">installed</span>
+                  </li>
+                {/each}
+                {#if plan.steamodded}
+                  <li>
+                    <span class="dep-name">
+                      Steamodded{plan.steamodded.min_tag
+                        ? ` ${plan.steamodded.min_tag}+`
+                        : ""}
+                    </span>
+                    <span
+                      class="dep-state"
+                      class:ok={plan.steamodded.satisfied}
+                      class:missing={!plan.steamodded.satisfied}
+                    >
+                      {plan.steamodded.satisfied
+                        ? "installed"
+                        : plan.steamodded.installed
+                          ? "too old"
+                          : "missing"}
+                    </span>
+                  </li>
+                {/if}
+                {#if plan.talisman}
+                  <li>
+                    <span class="dep-name">Talisman</span>
+                    <span
+                      class="dep-state"
+                      class:ok={plan.talisman.installed}
+                      class:missing={!plan.talisman.installed}
+                    >
+                      {plan.talisman.installed ? "installed" : "missing"}
+                    </span>
+                  </li>
+                {/if}
+                {#if plan.lovely}
+                  <li>
+                    <span class="dep-name">
+                      Lovely {plan.lovely.min_version}+
+                    </span>
+                    <span
+                      class="dep-state"
+                      class:ok={plan.lovely.satisfied}
+                      class:missing={!plan.lovely.satisfied}
+                    >
+                      {plan.lovely.satisfied ? "installed" : "update needed"}
+                    </span>
+                  </li>
+                {/if}
+              </ul>
+              {#if planDependencies.length === 0 && plan.satisfied.length === 0 && !plan.steamodded && !plan.talisman && !plan.lovely}
+                <p class="dep-empty">No dependencies</p>
+              {/if}
+              {#each plan.warnings as warning, i (i)}
+                <p class="dep-warning">{warning}</p>
+              {/each}
+            {/if}
+          </div>
         {/if}
 
         {#if mod.categories && mod.categories.length > 0}
@@ -1409,6 +1664,164 @@
 </div>
 
 <style>
+  .source-picker {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    margin-top: 0.75rem;
+    flex-wrap: wrap;
+  }
+
+  .source-label {
+    font-family: "M6X11", sans-serif;
+    color: var(--ui-text);
+    opacity: 0.8;
+    margin-right: 0.2rem;
+  }
+
+  .source-option {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    background: var(--ui-mod-chip-bg);
+    border: 2px solid var(--ui-mod-chip-border);
+    color: var(--ui-mod-chip-text);
+    font-family: "M6X11", sans-serif;
+    font-size: 0.95rem;
+    padding: 0.35rem 0.7rem;
+    border-radius: 6px;
+    cursor: pointer;
+  }
+
+  .source-option.active,
+  .source-option:hover:not(:disabled) {
+    background: var(--ui-mod-chip-active-bg);
+    color: var(--ui-mod-chip-active-text);
+  }
+
+  .source-current {
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    opacity: 0.8;
+  }
+
+  .switch-source-button {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    margin-top: 0.6rem;
+    padding: 0.5rem 0.9rem;
+    border: none;
+    border-radius: 6px;
+    background: var(--ui-info);
+    color: var(--ui-text);
+    outline: var(--ui-info-strong) solid 2px;
+    font-family: "M6X11", sans-serif;
+    cursor: pointer;
+  }
+
+  .switch-source-button:disabled {
+    opacity: 0.7;
+    cursor: not-allowed;
+  }
+
+  .flag-badges {
+    display: flex;
+    gap: 0.4rem;
+    margin-top: 0.6rem;
+    flex-wrap: wrap;
+  }
+
+  .flag-badge {
+    font-family: "M6X11", sans-serif;
+    font-size: 0.8rem;
+    padding: 0.25rem 0.5rem;
+    border-radius: 4px;
+    text-transform: uppercase;
+    color: #fff;
+    border: 1px solid rgba(255, 255, 255, 0.25);
+  }
+
+  .flag-badge.deprecated {
+    background: rgba(192, 64, 56, 0.92);
+  }
+
+  .flag-badge.ai {
+    background: rgba(121, 110, 158, 0.95);
+  }
+
+  .flag-badge.nsfw {
+    background: rgba(160, 40, 90, 0.95);
+  }
+
+  .ts-button {
+    margin-bottom: 0.5rem;
+  }
+
+  .dependencies-section {
+    margin-top: 1.5rem;
+  }
+
+  .dependencies-section h3 {
+    color: var(--ui-heading);
+    font-size: 1.5rem;
+    margin-bottom: 0.6rem;
+  }
+
+  .dep-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+  }
+
+  .dep-list li {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    padding: 0.4rem 0.6rem;
+    border-radius: 6px;
+    background: var(--ui-mod-chip-bg);
+    border: 1px solid var(--ui-mod-chip-border);
+    color: var(--ui-mod-chip-text);
+  }
+
+  .dep-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .dep-state {
+    font-family: "M6X11", sans-serif;
+    font-size: 0.85rem;
+    flex-shrink: 0;
+  }
+
+  .dep-state.ok {
+    color: var(--ui-success-strong);
+  }
+
+  .dep-state.missing {
+    color: var(--ui-warning);
+  }
+
+  .dep-empty,
+  .dep-warning {
+    color: var(--ui-text);
+    opacity: 0.8;
+    margin: 0.4rem 0 0;
+  }
+
+  .dep-warning {
+    color: var(--ui-warning);
+    opacity: 1;
+  }
+
   :global(.description img) {
     max-width: 100%;
     max-height: 300px;
