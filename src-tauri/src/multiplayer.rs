@@ -1182,8 +1182,8 @@ pub fn installed_api(found: &[FoundMod]) -> Option<ApiInstall> {
 }
 
 pub fn is_bet_key(key: &str) -> bool {
-    key.len() >= BET_ENV_PREFIX.len()
-        && key[..BET_ENV_PREFIX.len()].eq_ignore_ascii_case(BET_ENV_PREFIX)
+    key.get(..BET_ENV_PREFIX.len())
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case(BET_ENV_PREFIX))
 }
 
 /// Drops BET_ variables, such as those in a user supplied launch prefix
@@ -1869,6 +1869,10 @@ mod tests {
         assert!(is_bet_key("BET_"));
         assert!(!is_bet_key("BETTER"));
         assert!(!is_bet_key("ALPHABET_X"));
+        // Byte 4 falls inside a multibyte character
+        assert!(!is_bet_key("abcé"));
+        assert!(!is_bet_key("BETé"));
+        assert!(!is_bet_key("é"));
     }
 
     #[test]
