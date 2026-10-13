@@ -108,11 +108,24 @@ describe("controllerNavigation", () => {
     let rafMock: ReturnType<typeof vi.fn>;
     let cancelRafMock: ReturnType<typeof vi.fn>;
 
-    function pad(index: number, pressed: number[] = []): Gamepad {
+    function pad(
+      index: number,
+      pressed: number[] = [],
+      axes: number[] = [0, 0],
+    ): Gamepad {
       const buttons = Array.from({ length: 16 }, (_, i) => ({
         pressed: pressed.includes(i),
       }));
-      return { index, buttons, axes: [0, 0] } as unknown as Gamepad;
+      return { index, buttons, axes } as unknown as Gamepad;
+    }
+
+    function focusTargets() {
+      const first = document.createElement("button");
+      const second = document.createElement("button");
+      document.body.append(first, second);
+      rect(first, 0, 0);
+      rect(second, 0, 100);
+      return { first, second };
     }
 
     function gamepadEvent(type: string, index: number) {
@@ -184,6 +197,48 @@ describe("controllerNavigation", () => {
       gamepads[0] = pad(0, [1]);
       runFrame();
       expect(onCancel).toHaveBeenCalledTimes(1);
+      stop();
+    });
+
+    it("ignores the d-pad press that woke the gamepad", () => {
+      const { first } = focusTargets();
+      const stop = startControllerNavigation({ onCancel: vi.fn() });
+
+      gamepads[0] = pad(0, [13]);
+      gamepadEvent("gamepadconnected", 0);
+      runFrame();
+      runFrame();
+      expect(document.activeElement).not.toBe(first);
+
+      gamepads[0] = pad(0);
+      runFrame();
+      gamepads[0] = pad(0, [13]);
+      runFrame();
+      expect(document.activeElement).toBe(first);
+      stop();
+    });
+
+    it("ignores the stick push that woke the gamepad until it changes", () => {
+      const { first } = focusTargets();
+      const stop = startControllerNavigation({ onCancel: vi.fn() });
+
+      gamepads[0] = pad(0, [], [0, 1]);
+      gamepadEvent("gamepadconnected", 0);
+      runFrame();
+      expect(document.activeElement).not.toBe(first);
+
+      gamepads[0] = pad(0, [], [1, 0]);
+      runFrame();
+      expect(document.activeElement).toBe(first);
+      stop();
+    });
+
+    it("seeds the direction of a pad that is already connected", () => {
+      const { first } = focusTargets();
+      gamepads[0] = pad(0, [12]);
+      const stop = startControllerNavigation({ onCancel: vi.fn() });
+      runFrame();
+      expect(document.activeElement).not.toBe(first);
       stop();
     });
   });

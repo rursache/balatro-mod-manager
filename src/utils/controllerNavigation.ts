@@ -281,11 +281,22 @@ export function startControllerNavigation(
     frame = window.requestAnimationFrame(tick);
   };
 
+  // A direction held while a pad wakes is ignored until it is released or changed
+  const seedDirection = (gamepads: Gamepad[]) => {
+    const direction = getGamepadDirection(gamepads, axisThreshold);
+    if (direction && !heldDirection) {
+      heldDirection = direction;
+      nextMoveAt = Number.POSITIVE_INFINITY;
+    }
+  };
+
   const startLoop = () => {
     if (running || stopped) return;
     running = true;
     // The press that wakes a pad is still held on the first tick, so it must not count
-    previousButtons = getPressedGamepadButtons(readGamepads());
+    const gamepads = readGamepads();
+    previousButtons = getPressedGamepadButtons(gamepads);
+    seedDirection(gamepads);
     frame = window.requestAnimationFrame(tick);
   };
 
@@ -303,6 +314,7 @@ export function startControllerNavigation(
       for (const button of getPressedGamepadButtons([event.gamepad])) {
         previousButtons.add(button);
       }
+      seedDirection([event.gamepad]);
     }
     startLoop();
   };
