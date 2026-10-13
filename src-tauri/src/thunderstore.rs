@@ -234,36 +234,14 @@ pub fn find_version<'a>(pkg: &'a TsPackage, version: &str) -> Option<&'a TsVersi
 /// `1.1814.0` is `1.0.0-beta-1814a`, from 26.x on both use the same string
 #[allow(dead_code)]
 pub fn steamodded_version_to_tag(version: &str) -> Option<String> {
-    let parts = parse_version(version)?;
-    let [major, minor, patch] = parts.as_slice() else {
-        return None;
-    };
-    match major {
-        0 => None,
-        1 => {
-            let letter = char::from(b'a' + u8::try_from(*patch).ok().filter(|p| *p < 26)?);
-            Some(format!("1.0.0-beta-{minor:04}{letter}"))
-        }
-        _ => Some(version.trim().to_string()),
-    }
+    bmm_lib::smods_installer::ts_version_to_tag(version)
 }
 
 /// Reverse of [`steamodded_version_to_tag`], also accepts the `~BETA-` spelling of mod headers
 #[allow(dead_code)]
 pub fn steamodded_tag_to_version(tag: &str) -> Option<String> {
-    let tag = tag.trim().trim_start_matches(['v', 'V']);
-    let lower = tag.to_ascii_lowercase().replace('~', "-");
-    if let Some(rest) = lower.strip_prefix("1.0.0-beta-") {
-        let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
-        let minor = digits.parse::<u64>().ok()?;
-        let patch = match rest[digits.len()..].chars().next() {
-            None => 0,
-            Some(c) if c.is_ascii_lowercase() => u64::from(c as u8 - b'a'),
-            Some(_) => return None,
-        };
-        return Some(format!("1.{minor}.{patch}"));
-    }
-    parse_version(tag).map(|_| tag.to_string())
+    let (major, minor, patch) = bmm_lib::smods_installer::parse_smods_version(tag)?;
+    Some(format!("{major}.{minor}.{patch}"))
 }
 
 /// Maps Thunderstore categories to the app categories, `AI Generated` is a flag instead
@@ -711,16 +689,6 @@ pub async fn sync(force: bool) -> Result<Vec<TsPackage>, String> {
             LAST_FAILED_SYNC.store(now, AtomicOrdering::Relaxed);
             log::warn!("Thunderstore: sync failed, serving cached packages: {e}");
             set_last_error(Some(e));
-/// Full names of every cached package, empty when nothing is cached. Never hits the network
-pub async fn cached_full_names() -> Vec<String> {
-    let mut guard = CACHE.lock().await;
-    load_or_empty(&mut guard)
-        .packages
-        .iter()
-        .map(|p| p.full_name.clone())
-        .collect()
-}
-
             Ok(working.packages)
         }
         Err(e) => {
@@ -741,6 +709,16 @@ pub async fn cached_packages() -> Result<Vec<TsPackage>, String> {
         }
     }
     sync(false).await
+}
+
+/// Full names of every cached package, empty when nothing is cached. Never hits the network
+pub async fn cached_full_names() -> Vec<String> {
+    let mut guard = CACHE.lock().await;
+    load_or_empty(&mut guard)
+        .packages
+        .iter()
+        .map(|p| p.full_name.clone())
+        .collect()
 }
 
 pub fn find_package<'a>(packages: &'a [TsPackage], full_name: &str) -> Option<&'a TsPackage> {
@@ -943,7 +921,11 @@ pub(crate) mod tests {
         assert_eq!(tag("1.1016.2").as_deref(), Some("1.0.0-beta-1016c"));
         assert_eq!(tag("1.827.2").as_deref(), Some("1.0.0-beta-0827c"));
         assert_eq!(tag("26.1002.0").as_deref(), Some("26.1002.0"));
-        assert_eq!(tag("0.9.8"), None);
+        assert_eq!(tag("0.9.8").as_deref(), Some("0.9.8"));
+        assert_eq!(
+            tag("1.1531.999999").as_deref(),
+            Some("1.0.0-beta-1531zeebee")
+        );
         assert_eq!(tag("1.2"), None);
 
         let back = steamodded_tag_to_version;
