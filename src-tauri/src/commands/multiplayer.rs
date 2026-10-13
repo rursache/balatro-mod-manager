@@ -434,6 +434,9 @@ async fn execute(
     })
 }
 
+/// Installs the track root first, then removes the other track so a failing game mode
+/// never leaves both tracks installed, then installs the game modes. Manual copies go
+/// right after the package replacing them installed
 async fn execute_steps(
     state: &tauri::State<'_, AppState>,
     plan: &TrackPlan,
@@ -444,7 +447,7 @@ async fn execute_steps(
     removed: &mut Vec<String>,
 ) -> Result<(), String> {
     let mut adopted: Vec<String> = Vec::new();
-    for full_name in &plan.packages {
+    for (position, full_name) in plan.packages.iter().enumerate() {
         // Planned one by one so each package sees what the previous ones installed
         let inputs = install_cmd::load_plan_inputs(state).await?;
         let mut package_plan = install_plan::plan_install(
@@ -464,23 +467,60 @@ async fn execute_steps(
         run.warnings.extend(package_plan.warnings.iter().cloned());
         install_cmd::run_plan(&state.db, &package_plan, install_steamodded, mods_dirs, run).await?;
         plans.push(package_plan);
-    }
 
-    for old in &plan.replace {
+        replace_copies_of(state, plan, full_name, &adopted, mods_dirs, run, removed).await?;
+        if position == 0 {
+            remove_other_track(state, plan, removed).await?;
+        }
+    }
+    Ok(())
+}
+
+async fn remove_other_track(
+    state: &tauri::State<'_, AppState>,
+    plan: &TrackPlan,
+    removed: &mut Vec<String>,
+) -> Result<(), String> {
+    let mut api_removed = false;
+    for target in &plan.remove {
+        removed.push(remove_copy(&state.db, target).await?);
+        api_removed |= target.role == Role::Api;
+    }
+    if api_removed {
+        remove_tracked_dlls(&state.db);
+    }
+    Ok(())
+}
+
+/// Removes the manual copies `package` replaces once it is installed
+async fn replace_copies_of(
+    state: &tauri::State<'_, AppState>,
+    plan: &TrackPlan,
+    package: &str,
+    adopted: &[String],
+    mods_dirs: &[PathBuf],
+    run: &mut PlanRun,
+    removed: &mut Vec<String>,
+) -> Result<(), String> {
+    let replaced = plan.replace.iter().filter(|r| {
+        r.replaced_by
+            .as_deref()
+            .is_some_and(|p| p.eq_ignore_ascii_case(package))
+    });
+    for old in replaced {
         let old_path = Path::new(&old.path);
         if !old_path.exists() {
             continue;
         }
-        let new_path = old.replaced_by.as_deref().and_then(|package| {
-            run.installed
-                .iter()
-                .find(|m| {
-                    m.source_id
-                        .as_deref()
-                        .is_some_and(|id| id.eq_ignore_ascii_case(package))
-                })
-                .map(|m| m.path.clone())
-        });
+        let new_path = run
+            .installed
+            .iter()
+            .find(|m| {
+                m.source_id
+                    .as_deref()
+                    .is_some_and(|id| id.eq_ignore_ascii_case(package))
+            })
+            .map(|m| m.path.clone());
         let adopted_here = old
             .tracked_name
             .as_ref()
@@ -501,15 +541,6 @@ async fn execute_steps(
                 old.path
             )),
         }
-    }
-
-    let mut api_removed = false;
-    for target in &plan.remove {
-        removed.push(remove_copy(&state.db, target).await?);
-        api_removed |= target.role == Role::Api;
-    }
-    if api_removed {
-        remove_tracked_dlls(&state.db);
     }
     Ok(())
 }
