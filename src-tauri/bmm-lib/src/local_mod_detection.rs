@@ -893,6 +893,9 @@ pub struct DetectedMod {
     pub conflicts: Vec<String>,
     pub catalog_match: Option<CatalogMatch>,
     pub is_duplicate: bool,
+    /// Thunderstore identity read from a `manifest.json`, so the UI can offer to track it
+    #[serde(default)]
+    pub thunderstore: Option<ThunderstorePackageRef>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -903,45 +906,122 @@ pub struct CatalogMatch {
     pub version: Option<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-struct ThunderstoreManifest {
-    name: String,
-    #[serde(rename = "version_number")]
-    version_number: Option<String>,
-    #[serde(rename = "website_url")]
-    website_url: Option<String>,
-    description: Option<String>,
-    dependencies: Option<Vec<String>>,
+/// The `manifest.json` at the root of every Thunderstore package
+#[derive(Debug, Serialize, Deserialize, Clone, Default, PartialEq, Eq)]
+pub struct ThunderstoreManifest {
+    pub name: String,
+    #[serde(default)]
+    pub version_number: Option<String>,
+    #[serde(default)]
+    pub website_url: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub dependencies: Option<Vec<String>>,
+    /// Not part of the upload format, only present when a tool added it
+    #[serde(default, alias = "author", alias = "author_name")]
+    pub namespace: Option<String>,
 }
 
-// Add this function to parse Thunderstore manifest files
-fn parse_thunderstore_manifest(
-    manifest_path: &Path,
-    mod_path: &Path,
-) -> Result<Option<DetectedMod>, String> {
-    let file = match File::open(manifest_path) {
-        Ok(file) => file,
+/// Thunderstore package identity of a mod found on disk
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+pub struct ThunderstorePackageRef {
+    /// None when neither the manifest nor a `Namespace-Name` folder names it,
+    /// the package can then only be matched by name
+    pub namespace: Option<String>,
+    pub name: String,
+    /// `Namespace-Name`, the database source_id, when the namespace is known
+    pub full_name: Option<String>,
+    pub version: Option<String>,
+    pub website_url: Option<String>,
+    /// Raw `Namespace-Name-x.y.z` dependency strings
+    pub dependencies: Vec<String>,
+}
+
+fn is_thunderstore_identifier(s: &str) -> bool {
+    !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// Splits an install folder named `Namespace-Name`, the layout used by
+/// r2modman and by this app for Thunderstore installs
+pub fn split_package_folder_name(folder: &str) -> Option<(&str, &str)> {
+    let (namespace, name) = folder.split_once('-')?;
+    (is_thunderstore_identifier(namespace) && is_thunderstore_identifier(name))
+        .then_some((namespace, name))
+}
+
+/// Parses manifest.json content, tolerating the UTF-8 BOM and trailing commas
+/// that Thunderstore packages often carry
+pub fn parse_thunderstore_manifest_str(content: &str) -> Option<ThunderstoreManifest> {
+    let content = content.trim_start_matches('\u{feff}');
+    let manifest: ThunderstoreManifest = serde_json::from_str(content)
+        .or_else(|_| serde_json::from_str(&strip_trailing_commas(content)))
+        .ok()?;
+    (!manifest.name.trim().is_empty()).then_some(manifest)
+}
+
+/// Builds the package identity of a manifest found in `folder_name`. The
+/// namespace comes from the manifest or from a `Namespace-Name` folder whose
+/// name part matches the manifest name
+pub fn thunderstore_package_ref(
+    manifest: &ThunderstoreManifest,
+    folder_name: Option<&str>,
+) -> ThunderstorePackageRef {
+    let name = manifest.name.trim().to_string();
+    let namespace = manifest
+        .namespace
+        .as_deref()
+        .map(str::trim)
+        .filter(|ns| is_thunderstore_identifier(ns))
+        .map(str::to_string)
+        .or_else(|| {
+            folder_name
+                .and_then(split_package_folder_name)
+                .filter(|(_, folder_pkg)| folder_pkg.eq_ignore_ascii_case(&name))
+                .map(|(ns, _)| ns.to_string())
+        });
+    let full_name = namespace
+        .as_ref()
+        .filter(|_| is_thunderstore_identifier(&name))
+        .map(|ns| format!("{ns}-{name}"));
+    ThunderstorePackageRef {
+        namespace,
+        name,
+        full_name,
+        version: manifest.version_number.clone(),
+        website_url: manifest.website_url.clone(),
+        dependencies: manifest.dependencies.clone().unwrap_or_default(),
+    }
+}
+
+fn read_thunderstore_manifest(manifest_path: &Path) -> Option<ThunderstoreManifest> {
+    let content = match fs::read_to_string(manifest_path) {
+        Ok(content) => content,
         Err(e) => {
             log::debug!(
                 "Failed to open manifest file {}: {}",
                 manifest_path.display(),
                 e
             );
-            return Ok(None);
+            return None;
         }
     };
+    let manifest = parse_thunderstore_manifest_str(&content);
+    if manifest.is_none() {
+        log::debug!("Failed to parse manifest file {}", manifest_path.display());
+    }
+    manifest
+}
 
-    let manifest: ThunderstoreManifest = match serde_json::from_reader(file) {
-        Ok(json) => json,
-        Err(e) => {
-            log::debug!(
-                "Failed to parse manifest file {}: {}",
-                manifest_path.display(),
-                e
-            );
-            return Ok(None);
-        }
+fn parse_thunderstore_manifest(
+    manifest_path: &Path,
+    mod_path: &Path,
+) -> Result<Option<DetectedMod>, String> {
+    let Some(manifest) = read_thunderstore_manifest(manifest_path) else {
+        return Ok(None);
     };
+    let folder_name = mod_path.file_name().and_then(|n| n.to_str());
+    let package = thunderstore_package_ref(&manifest, folder_name);
 
     // Special handling for Steamodded manifest
     if manifest.name.to_lowercase() == "steamodded" {
@@ -959,28 +1039,30 @@ fn parse_thunderstore_manifest(
             conflicts: Vec::new(),
             catalog_match: None,
             is_duplicate: false,
+            thunderstore: Some(package),
         }));
     }
 
     // For other manifests, create a generic mod entry
+    let author = package
+        .namespace
+        .clone()
+        .unwrap_or_else(|| "Unknown".to_string());
     Ok(Some(DetectedMod {
         name: manifest.name.clone(),
         id: manifest.name.replace(" ", ""),
-        author: vec!["Unknown".to_string()], // Thunderstore manifest doesn't specify authors directly
+        author: vec![author],
         description: manifest
             .description
             .unwrap_or_else(|| format!("Mod found in {}", mod_path.display())),
-        prefix: if manifest.name.len() >= 4 {
-            manifest.name[0..4].to_lowercase()
-        } else {
-            manifest.name.to_lowercase()
-        },
+        prefix: manifest.name.chars().take(4).collect::<String>().to_lowercase(),
         version: manifest.version_number,
         path: mod_path.to_string_lossy().to_string(),
         dependencies: manifest.dependencies.unwrap_or_default(),
         conflicts: Vec::new(),
         catalog_match: None,
         is_duplicate: false,
+        thunderstore: Some(package),
     }))
 }
 
@@ -1012,6 +1094,10 @@ pub fn detect_manual_mods(
     let managed_names: HashSet<String> =
         managed_mods.iter().map(|m| m.name.to_lowercase()).collect();
     let managed_catalog_names = managed_names.clone();
+    let managed_source_ids: HashSet<String> = managed_mods
+        .iter()
+        .filter_map(|m| m.source_id.as_ref().map(|id| id.to_lowercase()))
+        .collect();
     let steamodded_tracked = managed_mods
         .iter()
         .any(|m| m.name.eq_ignore_ascii_case("steamodded") && Path::new(&m.path).exists());
@@ -1053,6 +1139,7 @@ pub fn detect_manual_mods(
                 conflicts: Vec::new(),
                 catalog_match: None,
                 is_duplicate: false,
+                thunderstore: None,
             };
             let mod_name_lower = talisman.name.to_lowercase();
             if managed_names.contains(&mod_name_lower) {
@@ -1080,9 +1167,14 @@ pub fn detect_manual_mods(
                 continue;
             }
 
-            // Check for name duplication with managed mods
+            // Check for name or package duplication with managed mods
             let mod_name_lower = mod_info.name.to_lowercase();
-            if managed_names.contains(&mod_name_lower) {
+            let same_package = mod_info
+                .thunderstore
+                .as_ref()
+                .and_then(|ts| ts.full_name.as_ref())
+                .is_some_and(|id| managed_source_ids.contains(&id.to_lowercase()));
+            if managed_names.contains(&mod_name_lower) || same_package {
                 mod_info.is_duplicate = true;
                 // Append a suffix to the name
                 mod_info.name = format!("{} (Manual)", mod_info.name);
@@ -1609,7 +1701,8 @@ fn detect_mod_in_directory(mod_path: &Path) -> Result<Option<DetectedMod>, Strin
                 continue;
             }
 
-            if let Some(detected_mod) = parse_mod_json(json_path, mod_path)? {
+            if let Some(mut detected_mod) = parse_mod_json(json_path, mod_path)? {
+                detected_mod.thunderstore = thunderstore_mod.thunderstore.clone();
                 return Ok(Some(detected_mod));
             }
         }
@@ -1641,6 +1734,7 @@ fn detect_mod_in_directory(mod_path: &Path) -> Result<Option<DetectedMod>, Strin
                 conflicts: Vec::new(),
                 catalog_match: None,
                 is_duplicate: false,
+                thunderstore: None,
             }));
         }
     }
@@ -1698,6 +1792,7 @@ fn detect_mod_in_directory(mod_path: &Path) -> Result<Option<DetectedMod>, Strin
                 conflicts: Vec::new(),
                 catalog_match: None,
                 is_duplicate: false,
+                thunderstore: None,
             }));
         }
     }
@@ -1918,6 +2013,7 @@ fn parse_mod_json_content(content: &str, mod_path: &Path) -> Result<Option<Detec
         conflicts: mod_json.conflicts,
         catalog_match: None,
         is_duplicate: false,
+        thunderstore: None,
     }))
 }
 
@@ -1995,6 +2091,7 @@ fn parse_mod_lua_header(lua_path: &Path, mod_path: &Path) -> Result<Option<Detec
                     conflicts: Vec::new(),
                     catalog_match: None,
                     is_duplicate: false,
+                    thunderstore: None,
                 }));
             }
             Ok(None)
@@ -2135,6 +2232,7 @@ fn finalize_lua_mod(mut fields: LuaHeaderFields, path_str: &str, name_hint: &str
         conflicts: fields.conflicts,
         catalog_match: None,
         is_duplicate: false,
+        thunderstore: None,
     }
 }
 
@@ -2259,6 +2357,7 @@ fn detect_mod_in_zip(zip_path: &Path) -> Result<Option<DetectedMod>, String> {
         conflicts: Vec::new(),
         catalog_match: None,
         is_duplicate: false,
+        thunderstore: None,
     }))
 }
 
@@ -2432,6 +2531,7 @@ mod tests {
                 conflicts: vec![],
                 catalog_match: None,
                 is_duplicate: false,
+                thunderstore: None,
             };
 
             let index = super::CatalogIndex::new(&catalog);
@@ -2464,6 +2564,7 @@ mod tests {
                 conflicts: vec![],
                 catalog_match: None,
                 is_duplicate: false,
+                thunderstore: None,
             };
 
             let index = super::CatalogIndex::new(&catalog);
@@ -2649,5 +2750,112 @@ mod tests {
         // Path without steamapps
         let no_steamapps = Path::new("/home/user/.local/share/Steam/common/Balatro");
         assert!(super::find_steamapps_root(no_steamapps).is_none());
+    }
+
+    #[test]
+    fn split_package_folder_name_requires_namespace_and_name() {
+        assert_eq!(
+            split_package_folder_name("BalatroMultiplayer-Multiplayer"),
+            Some(("BalatroMultiplayer", "Multiplayer"))
+        );
+        assert_eq!(
+            split_package_folder_name("just_frostice482-Amulet"),
+            Some(("just_frostice482", "Amulet"))
+        );
+        assert_eq!(split_package_folder_name("Multiplayer"), None);
+        assert_eq!(split_package_folder_name("CoolMod-1.0.0"), None);
+        assert_eq!(split_package_folder_name("Steamodded-smods-abc123"), None);
+        assert_eq!(split_package_folder_name("-Name"), None);
+    }
+
+    #[test]
+    fn parse_thunderstore_manifest_str_tolerates_bom_and_trailing_commas() {
+        let manifest = parse_thunderstore_manifest_str(
+            "\u{feff}{\"name\": \"Multiplayer\", \"version_number\": \"0.5.7\", \"website_url\": \"https://balatromp.com\", \"description\": \"MP\", \"dependencies\": [\"Steamodded-Steamodded-1.1620.0\",],}",
+        )
+        .expect("manifest parses");
+        assert_eq!(manifest.name, "Multiplayer");
+        assert_eq!(manifest.version_number.as_deref(), Some("0.5.7"));
+        assert_eq!(
+            manifest.dependencies,
+            Some(vec!["Steamodded-Steamodded-1.1620.0".to_string()])
+        );
+        assert!(parse_thunderstore_manifest_str("{\"name\": \"\"}").is_none());
+        assert!(parse_thunderstore_manifest_str("not json").is_none());
+    }
+
+    #[test]
+    fn detects_thunderstore_install_with_package_identity() {
+        let td = tempdir().unwrap();
+        let mod_dir = td.path().join("BalatroMultiplayer-Multiplayer");
+        std::fs::create_dir_all(&mod_dir).unwrap();
+        std::fs::write(
+            mod_dir.join("manifest.json"),
+            r#"{"name": "Multiplayer", "version_number": "0.5.7", "website_url": "https://github.com/Balatro-Multiplayer/BalatroMultiplayer", "description": "Multiplayer", "dependencies": ["Steamodded-Steamodded-1.1620.0"]}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            mod_dir.join("Multiplayer.json"),
+            r#"{"id": "Multiplayer", "name": "Multiplayer", "author": ["Virtualized"], "description": "Multiplayer mod", "prefix": "mp", "main_file": "main.lua", "version": "0.5.7"}"#,
+        )
+        .unwrap();
+        std::fs::write(mod_dir.join("main.lua"), "-- mp").unwrap();
+
+        let detected = detect_mod_in_directory(&mod_dir).unwrap().expect("detected");
+        // The richer mod json wins but keeps the Thunderstore identity
+        assert_eq!(detected.id, "Multiplayer");
+        let ts = detected.thunderstore.expect("thunderstore identity");
+        assert_eq!(ts.namespace.as_deref(), Some("BalatroMultiplayer"));
+        assert_eq!(ts.name, "Multiplayer");
+        assert_eq!(
+            ts.full_name.as_deref(),
+            Some("BalatroMultiplayer-Multiplayer")
+        );
+        assert_eq!(ts.version.as_deref(), Some("0.5.7"));
+        assert_eq!(ts.dependencies, vec!["Steamodded-Steamodded-1.1620.0"]);
+    }
+
+    #[test]
+    fn detects_manifest_only_package_in_plain_folder() {
+        let td = tempdir().unwrap();
+        let mod_dir = td.path().join("WheelOfFortuneTracker");
+        std::fs::create_dir_all(&mod_dir).unwrap();
+        std::fs::write(
+            mod_dir.join("manifest.json"),
+            r#"{"name": "WheelOfFortuneTracker", "version_number": "1.0.1", "website_url": "", "description": "Tracks wheel odds", "dependencies": []}"#,
+        )
+        .unwrap();
+
+        let detected = detect_mod_in_directory(&mod_dir).unwrap().expect("detected");
+        assert_eq!(detected.name, "WheelOfFortuneTracker");
+        assert_eq!(detected.author, vec!["Unknown".to_string()]);
+        let ts = detected.thunderstore.expect("thunderstore identity");
+        // A folder that is not Namespace-Name gives no namespace
+        assert_eq!(ts.namespace, None);
+        assert_eq!(ts.full_name, None);
+        assert_eq!(ts.name, "WheelOfFortuneTracker");
+    }
+
+    #[test]
+    fn folder_namespace_needs_matching_manifest_name() {
+        let manifest = ThunderstoreManifest {
+            name: "Multiplayer".into(),
+            ..Default::default()
+        };
+        let mismatched = thunderstore_package_ref(&manifest, Some("Someone-OtherMod"));
+        assert_eq!(mismatched.namespace, None);
+        let matched = thunderstore_package_ref(&manifest, Some("BalatroMultiplayer-multiplayer"));
+        assert_eq!(matched.namespace.as_deref(), Some("BalatroMultiplayer"));
+
+        let with_namespace = ThunderstoreManifest {
+            name: "Multiplayer".into(),
+            namespace: Some("BalatroMultiplayer".into()),
+            ..Default::default()
+        };
+        let from_manifest = thunderstore_package_ref(&with_namespace, Some("Multiplayer"));
+        assert_eq!(
+            from_manifest.full_name.as_deref(),
+            Some("BalatroMultiplayer-Multiplayer")
+        );
     }
 }
