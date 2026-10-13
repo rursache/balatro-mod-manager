@@ -3224,6 +3224,7 @@
         <div
           class="mods-scroll-container default-scrollbar"
           class:no-local-mods={localMods.length === 0}
+          class:installed-view={$currentCategory === "Installed Mods"}
           bind:this={modsScrollContainer}
           onscroll={handleModsScroll}
         >
@@ -4356,6 +4357,12 @@
     transform: translateZ(0);
     will-change: scroll-position;
     overscroll-behavior: contain;
+  }
+
+  /* The toolbar is absolutely positioned and 75px tall, start the section
+     dividers below it instead of underneath the folder and Update All buttons */
+  .mods-scroll-container.installed-view {
+    padding-top: calc(75px - 1rem);
   }
 
   .mods-grid {
