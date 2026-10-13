@@ -21,6 +21,7 @@
   </description>
   <url type="homepage">https://github.com/rursache/balatro-mod-manager</url>
   <releases>
+    <release version="1.0.0" date="2026-10-13"/>
     <release version="0.4.1"/>
   </releases>
 </component>

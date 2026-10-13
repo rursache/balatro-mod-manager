@@ -425,21 +425,21 @@ mod tests {
 
     #[test]
     fn issue_url_encodes_and_includes_template_version_and_caps_length() {
-        let url = issue_url("Crash & burn", "It broke\nbadly", "0.4.1", &sys());
+        let url = issue_url("Crash & burn", "It broke\nbadly", "1.0.0", &sys());
         assert!(url.starts_with(
-            "https://github.com/rursache/balatro-mod-manager/issues/new?template=bug_report.yml&title=Crash%20%26%20burn&version=0.4.1&additional-info="
+            "https://github.com/rursache/balatro-mod-manager/issues/new?template=bug_report.yml&title=Crash%20%26%20burn&version=1.0.0&additional-info="
         ));
         assert!(url.contains("It%20broke%0Abadly"));
         assert!(url.contains("Apple%20M4"));
         assert!(!url.contains(' '));
 
         let long = "x".repeat(50_000);
-        let capped = issue_url("t", &long, "0.4.1", &sys());
+        let capped = issue_url("t", &long, "1.0.0", &sys());
         assert!(capped.len() <= ISSUE_URL_MAX_LEN);
         assert!(capped.contains("xxx..."));
 
         let wide = "\u{1F600}".repeat(5_000);
-        assert!(issue_url("t", &wide, "0.4.1", &sys()).len() <= ISSUE_URL_MAX_LEN);
+        assert!(issue_url("t", &wide, "1.0.0", &sys()).len() <= ISSUE_URL_MAX_LEN);
     }
 
     #[test]

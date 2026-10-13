@@ -28,7 +28,7 @@ body:
     attributes:
       label: Mod manager version
       description: The version of Mod manager you were using when this bug was encountered. If you do not know where to find this. Look in the bottom right of the manager.
-      placeholder: "Example: v0.4.1"
+      placeholder: "Example: v1.0.0"
     validations:
       required: true
   - type: textarea

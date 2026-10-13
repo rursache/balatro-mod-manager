@@ -3,6 +3,8 @@
   import { Confetti } from "svelte-confetti";
   import { openExternal } from "$lib/opener";
 
+  export let version = "";
+
   let showConfetti = false;
 
   let buttonRect: DOMRect;
@@ -65,7 +67,9 @@
         </button>
       </div>
 
-      <p id="versiontext">Current version: v0.4.1</p>
+      {#if version}
+        <p id="versiontext">Current version: v{version}</p>
+      {/if}
     </div>
 
     <div class="profile-section">

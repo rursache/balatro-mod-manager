@@ -377,7 +377,7 @@
     </div>
 
     <div class="section-wrapper" class:active={currentSection === "about"}>
-      <About />
+      <About version={appVersion} />
     </div>
   </div>
 
@@ -424,7 +424,7 @@
     {onError}
   />
 
-  {#if appVersion}<div class="version-text">v0.4.1</div>{/if}
+  {#if appVersion}<div class="version-text">v{appVersion}</div>{/if}
 </div>
 
 <LovelyMissingPopup />

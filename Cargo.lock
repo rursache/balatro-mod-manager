@@ -336,7 +336,7 @@ dependencies = [
 
 [[package]]
 name = "balatro-mod-manager"
-version = "0.4.1"
+version = "1.0.0"
 dependencies = [
  "assert_fs",
  "bmm-lib",
@@ -491,7 +491,7 @@ dependencies = [
 
 [[package]]
 name = "bmm-lib"
-version = "0.4.1"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "bincode",

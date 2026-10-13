@@ -102,7 +102,7 @@
     <h1>Welcome to Balatro Mod Manager</h1>
     <BalatroPicker />
     <ReportIssue />
-    {#if appVersion}<div class="version-text">v0.4.1</div>{/if}
+    {#if appVersion}<div class="version-text">v{appVersion}</div>{/if}
   </div>
 {/if}
 
