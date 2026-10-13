@@ -1130,15 +1130,55 @@ pub async fn add_installed_mod(
     dependencies: Vec<String>,
     current_version: String,
 ) -> Result<(), String> {
-    {
+    // Callers only record a mod after its install succeeded, so the folder the
+    // previous row pointed at is now stale and safe to clean up below
+    let (previous_path, protected_paths) = {
         let db = state.db.lock().unwrap_or_else(|e| e.into_inner());
+        let installed = map_error(db.get_installed_mods())?;
+        let previous_path = installed
+            .iter()
+            .find(|m| m.name == name)
+            .map(|m| PathBuf::from(&m.path));
+        let protected_paths: Vec<PathBuf> = installed
+            .iter()
+            .filter(|m| m.name != name && !m.path.trim().is_empty())
+            .map(|m| PathBuf::from(&m.path))
+            .collect();
         let current_version = if current_version.is_empty() {
             None
         } else {
             Some(current_version)
         };
         map_error(db.add_installed_mod(&name, &path, &dependencies, current_version))?;
+        (previous_path, protected_paths)
+    };
+
+    let mods_dirs = local_mod_detection::mod_dir_candidates()
+        .or_else(|_| local_mod_detection::resolve_mods_dir_path().map(|p| vec![p]))
+        .unwrap_or_default();
+    if !mods_dirs.is_empty() {
+        let cleanup_name = name.clone();
+        let new_path = PathBuf::from(&path);
+        let cleanup = tauri::async_runtime::spawn_blocking(move || {
+            bmm_lib::installer::cleanup_replaced_install(
+                &cleanup_name,
+                previous_path.as_deref(),
+                &new_path,
+                &mods_dirs,
+                &protected_paths,
+            )
+        })
+        .await;
+        match cleanup {
+            Ok(removed) if !removed.is_empty() => {
+                log::info!("Removed {} stale install(s) of {name}", removed.len());
+                sync_compat_helper_after_mod_change(&state).await;
+            }
+            Ok(_) => {}
+            Err(e) => log::warn!("Cleanup after installing {name} failed: {e}"),
+        }
     }
+
     refresh_mod_detection_cache();
     emit_installed_mods_changed(&app_handle, vec![name], Vec::new());
     Ok(())

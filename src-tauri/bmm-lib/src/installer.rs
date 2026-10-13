@@ -1064,6 +1064,154 @@ fn validate_uninstall_path(path: &PathBuf, mods_dirs: &[PathBuf]) -> Result<(), 
     Ok(())
 }
 
+fn canonical_or_self(path: &Path) -> PathBuf {
+    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+}
+
+/// Checks that `candidate` is an app removable mod folder: a real directory
+/// sitting directly in a Mods dir that is not the fresh install, does not
+/// overlap it or another tracked mod, and is not a git checkout
+fn check_replaced_dir(
+    candidate: &Path,
+    new_path: &Path,
+    mods_dirs: &[PathBuf],
+    protected_paths: &[PathBuf],
+) -> Result<(), String> {
+    let meta = fs::symlink_metadata(candidate).map_err(|e| format!("cannot stat: {e}"))?;
+    if !meta.is_dir() {
+        return Err("not a real directory".into());
+    }
+
+    validate_uninstall_path(&candidate.to_path_buf(), mods_dirs).map_err(|e| e.to_string())?;
+
+    let canonical = canonical_or_self(candidate);
+    let parent_is_mods_dir = canonical
+        .parent()
+        .is_some_and(|parent| mods_dirs.iter().any(|m| canonical_or_self(m) == parent));
+    if !parent_is_mods_dir {
+        return Err("not a direct child of the Mods directory".into());
+    }
+
+    let name = candidate
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or_default()
+        .to_lowercase();
+    if name.is_empty() || name.starts_with('.') || name == "lovely" || name == "bmm-compat" {
+        return Err("reserved folder".into());
+    }
+
+    let overlaps = |other: &Path| {
+        let other = canonical_or_self(other);
+        canonical.starts_with(&other) || other.starts_with(&canonical)
+    };
+    if overlaps(new_path) {
+        return Err("overlaps the new install".into());
+    }
+    if protected_paths.iter().any(|p| overlaps(p)) {
+        return Err("belongs to another tracked mod".into());
+    }
+
+    if candidate.join(".git").exists() {
+        return Err("looks like a git checkout".into());
+    }
+
+    Ok(())
+}
+
+/// Cleans up after a successful install or update of `mod_name` at `new_path`
+///
+/// - removes `previous_path` (the folder the DB recorded before this install)
+///   when it differs from the new folder
+/// - for Steamodded also removes other `smods*`/`Steamodded*` copies in the
+///   same Mods dir, so updates never leave a second copy behind
+/// - every removal goes through [`check_replaced_dir`] and Steamodded folders
+///   must also contain a Steamodded install
+/// - a disabled previous install keeps the new one disabled
+///
+/// Returns the removed folders, failures are only logged
+pub fn cleanup_replaced_install(
+    mod_name: &str,
+    previous_path: Option<&Path>,
+    new_path: &Path,
+    mods_dirs: &[PathBuf],
+    protected_paths: &[PathBuf],
+) -> Vec<PathBuf> {
+    let mut removed = Vec::new();
+    if !new_path.is_dir() {
+        log::warn!(
+            "Skipping cleanup for {mod_name}: new install {} is missing",
+            new_path.display()
+        );
+        return removed;
+    }
+
+    let is_steamodded = mod_name.eq_ignore_ascii_case("steamodded");
+    // (folder, is the DB recorded previous install)
+    let mut candidates: Vec<(PathBuf, bool)> = Vec::new();
+    if let Some(prev) = previous_path.filter(|p| !p.as_os_str().is_empty() && p.exists()) {
+        candidates.push((prev.to_path_buf(), true));
+    }
+    if is_steamodded {
+        // Only the Mods dir holding the new install matters for duplicate loading
+        let new_parent = canonical_or_self(new_path).parent().map(Path::to_path_buf);
+        for mods_dir in mods_dirs
+            .iter()
+            .filter(|m| new_parent.as_deref() == Some(canonical_or_self(m).as_path()))
+        {
+            candidates.extend(
+                crate::smods_installer::find_steamodded_dirs(mods_dir)
+                    .into_iter()
+                    .map(|p| (p, false)),
+            );
+        }
+    }
+
+    let mut seen = std::collections::HashSet::new();
+    for (candidate, is_previous) in candidates {
+        if !seen.insert(canonical_or_self(&candidate)) {
+            continue;
+        }
+        if let Err(reason) = check_replaced_dir(&candidate, new_path, mods_dirs, protected_paths) {
+            log::debug!(
+                "Keeping {} after installing {mod_name}: {reason}",
+                candidate.display()
+            );
+            continue;
+        }
+        if is_steamodded && !crate::smods_installer::is_steamodded_install(&candidate) {
+            log::warn!(
+                "Keeping {}: recorded for Steamodded but it is not a Steamodded install",
+                candidate.display()
+            );
+            continue;
+        }
+
+        let was_disabled = is_previous && candidate.join(".lovelyignore").exists();
+        match remove_dir_with_retry(&candidate, 5) {
+            Ok(()) => {
+                log::info!(
+                    "Removed previous {mod_name} install at {}",
+                    candidate.display()
+                );
+                if was_disabled
+                    && !new_path.join(".lovelyignore").exists()
+                    && let Err(e) = apply_disabled_marker(new_path)
+                {
+                    log::warn!("Failed to keep {mod_name} disabled after update: {e}");
+                }
+                removed.push(candidate);
+            }
+            Err(e) => log::warn!(
+                "Failed to remove previous {mod_name} install at {}: {e}",
+                candidate.display()
+            ),
+        }
+    }
+
+    removed
+}
+
 fn resolve_mods_dir() -> Result<PathBuf, AppError> {
     // Ensure Proton symlinks are set up before resolving the mods directory.
     // This ensures that on Linux, the symlink from the Proton prefix to the
@@ -1318,5 +1466,261 @@ mod tests {
 
         let result = validate_uninstall_path(&nonexistent, &[mods_dir]);
         assert!(result.is_err());
+    }
+
+    fn make_mod(dir: &Path) {
+        std::fs::create_dir_all(dir).unwrap();
+        std::fs::write(dir.join("main.lua"), "-- mod").unwrap();
+    }
+
+    fn make_smods(dir: &Path, version: &str) {
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::create_dir_all(dir.join("lovely")).unwrap();
+        std::fs::write(dir.join("src").join("core.lua"), "").unwrap();
+        std::fs::write(dir.join("version.lua"), format!("return \"{version}\"")).unwrap();
+        std::fs::write(
+            dir.join("manifest.json"),
+            format!("{{\"name\": \"Steamodded\", \"version_number\": \"{version}\"}}"),
+        )
+        .unwrap();
+    }
+
+    fn mods_root() -> (tempfile::TempDir, PathBuf) {
+        let td = tempdir().unwrap();
+        let mods = td.path().join("Mods");
+        std::fs::create_dir_all(&mods).unwrap();
+        (td, mods)
+    }
+
+    #[test]
+    fn cleanup_update_removes_old_folder_after_success() {
+        let (_td, mods) = mods_root();
+        let old = mods.join("CoolMod-1.0.0");
+        let new = mods.join("CoolMod-1.1.0");
+        make_mod(&old);
+        make_mod(&new);
+
+        let removed = cleanup_replaced_install(
+            "CoolMod",
+            Some(&old),
+            &new,
+            std::slice::from_ref(&mods),
+            &[],
+        );
+
+        assert_eq!(removed, vec![old.clone()]);
+        assert!(!old.exists());
+        assert!(new.join("main.lua").exists());
+    }
+
+    #[test]
+    fn cleanup_failed_install_keeps_old_folder() {
+        let (_td, mods) = mods_root();
+        let old = mods.join("CoolMod-1.0.0");
+        make_mod(&old);
+        // The new folder never got created because the download failed
+        let new = mods.join("CoolMod-1.1.0");
+
+        let removed = cleanup_replaced_install(
+            "CoolMod",
+            Some(&old),
+            &new,
+            std::slice::from_ref(&mods),
+            &[],
+        );
+
+        assert!(removed.is_empty());
+        assert!(old.join("main.lua").exists());
+    }
+
+    #[test]
+    fn cleanup_same_folder_is_a_noop() {
+        let (_td, mods) = mods_root();
+        let path = mods.join("CoolMod");
+        make_mod(&path);
+
+        let removed = cleanup_replaced_install(
+            "CoolMod",
+            Some(&path),
+            &path,
+            std::slice::from_ref(&mods),
+            &[],
+        );
+
+        assert!(removed.is_empty());
+        assert!(path.join("main.lua").exists());
+    }
+
+    #[test]
+    fn cleanup_refuses_to_delete_outside_mods() {
+        let (td, mods) = mods_root();
+        let new = mods.join("CoolMod");
+        make_mod(&new);
+
+        let outside = td.path().join("Documents").join("CoolMod");
+        make_mod(&outside);
+        let nested = mods.join("OtherMod").join("CoolMod");
+        make_mod(&nested);
+        let escape = mods.join("..").join("Documents");
+
+        for previous in [&outside, &nested, &escape, &mods] {
+            let removed = cleanup_replaced_install(
+                "CoolMod",
+                Some(previous),
+                &new,
+                std::slice::from_ref(&mods),
+                &[],
+            );
+            assert!(removed.is_empty(), "{}", previous.display());
+            assert!(previous.exists(), "{}", previous.display());
+        }
+        assert!(new.join("main.lua").exists());
+        assert!(outside.join("main.lua").exists());
+    }
+
+    #[test]
+    fn cleanup_keeps_folder_of_another_tracked_mod() {
+        let (_td, mods) = mods_root();
+        let shared = mods.join("SharedFolder");
+        let new = mods.join("CoolMod");
+        make_mod(&shared);
+        make_mod(&new);
+
+        let removed = cleanup_replaced_install(
+            "CoolMod",
+            Some(&shared),
+            &new,
+            std::slice::from_ref(&mods),
+            std::slice::from_ref(&shared),
+        );
+
+        assert!(removed.is_empty());
+        assert!(shared.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cleanup_does_not_follow_symlinked_previous_install() {
+        let (td, mods) = mods_root();
+        let target = td.path().join("elsewhere");
+        make_mod(&target);
+        let link = mods.join("CoolMod-1.0.0");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        let new = mods.join("CoolMod");
+        make_mod(&new);
+
+        let removed = cleanup_replaced_install(
+            "CoolMod",
+            Some(&link),
+            &new,
+            std::slice::from_ref(&mods),
+            &[],
+        );
+
+        assert!(removed.is_empty());
+        assert!(target.join("main.lua").exists());
+    }
+
+    #[test]
+    fn cleanup_keeps_disabled_state_of_previous_install() {
+        let (_td, mods) = mods_root();
+        let old = mods.join("CoolMod-1.0.0");
+        let new = mods.join("CoolMod-1.1.0");
+        make_mod(&old);
+        make_mod(&new);
+        std::fs::write(old.join(".lovelyignore"), "").unwrap();
+
+        cleanup_replaced_install(
+            "CoolMod",
+            Some(&old),
+            &new,
+            std::slice::from_ref(&mods),
+            &[],
+        );
+
+        assert!(!old.exists());
+        assert!(new.join(".lovelyignore").exists());
+    }
+
+    #[test]
+    fn cleanup_steamodded_update_removes_versioned_folder_and_leftovers() {
+        let (_td, mods) = mods_root();
+        let recorded = mods.join("smods-1.0.0-beta-1814a");
+        let stale = mods.join("Steamodded-smods-abc1234");
+        let new = mods.join("Steamodded");
+        make_smods(&recorded, "1.0.0~BETA-1814a");
+        make_smods(&stale, "0.9.8");
+        make_smods(&new, "26.1002.0");
+        let unrelated = mods.join("JokerDisplay");
+        make_mod(&unrelated);
+        // Named like Steamodded but without its files, so it is left alone
+        let lookalike = mods.join("smods-notes");
+        make_mod(&lookalike);
+
+        let mut removed = cleanup_replaced_install(
+            "Steamodded",
+            Some(&recorded),
+            &new,
+            std::slice::from_ref(&mods),
+            &[],
+        );
+        removed.sort();
+
+        assert_eq!(removed, vec![stale.clone(), recorded.clone()]);
+        assert!(new.join("manifest.json").exists());
+        assert!(unrelated.exists());
+        assert!(lookalike.exists());
+    }
+
+    #[test]
+    fn cleanup_steamodded_keeps_recorded_path_that_is_not_steamodded() {
+        let (_td, mods) = mods_root();
+        let recorded = mods.join("SomethingElse");
+        make_mod(&recorded);
+        let new = mods.join("Steamodded");
+        make_smods(&new, "26.1002.0");
+
+        let removed = cleanup_replaced_install(
+            "Steamodded",
+            Some(&recorded),
+            &new,
+            std::slice::from_ref(&mods),
+            &[],
+        );
+
+        assert!(removed.is_empty());
+        assert!(recorded.exists());
+    }
+
+    #[test]
+    fn cleanup_steamodded_keeps_git_checkouts() {
+        let (_td, mods) = mods_root();
+        let checkout = mods.join("smods");
+        make_smods(&checkout, "dev");
+        std::fs::create_dir_all(checkout.join(".git")).unwrap();
+        let new = mods.join("Steamodded");
+        make_smods(&new, "26.1002.0");
+
+        let removed =
+            cleanup_replaced_install("Steamodded", None, &new, std::slice::from_ref(&mods), &[]);
+
+        assert!(removed.is_empty());
+        assert!(checkout.exists());
+    }
+
+    #[test]
+    fn cleanup_steamodded_leftover_scan_stays_in_active_mods_dir() {
+        let td = tempdir().unwrap();
+        let active = td.path().join("active").join("Mods");
+        let legacy = td.path().join("legacy").join("Mods");
+        let new = active.join("Steamodded");
+        let other = legacy.join("smods-old");
+        make_smods(&new, "26.1002.0");
+        make_smods(&other, "1.0.0");
+
+        let removed = cleanup_replaced_install("Steamodded", None, &new, &[active, legacy], &[]);
+
+        assert!(removed.is_empty());
+        assert!(other.exists());
     }
 }
