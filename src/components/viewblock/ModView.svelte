@@ -38,6 +38,7 @@
   import { descriptionsStore, setDescription } from "../../stores/descriptions";
   import LazyImage from "../common/LazyImage.svelte";
   import { isLinuxPlatform } from "$lib/platform";
+  import { isAnyPopupOpen } from "../../stores/popupManager";
   import { openExternal } from "$lib/opener";
   import {
     openCollectionPicker,
@@ -986,6 +987,25 @@
     currentModView.set(null);
   }
 
+  function isEditableTarget(target: EventTarget | null): boolean {
+    return (
+      target instanceof HTMLElement &&
+      (target.isContentEditable ||
+        target.closest("input, textarea, select") !== null)
+    );
+  }
+
+  function handleWindowKeydown(e: KeyboardEvent) {
+    // Escape belongs to the topmost popup while one is open
+    if (e.defaultPrevented || isAnyPopupOpen()) return;
+    if (
+      e.key === "Escape" ||
+      (e.key === "Backspace" && !isEditableTarget(e.target))
+    ) {
+      handleBack();
+    }
+  }
+
   onMount(async () => {
     isLinux = await isLinuxPlatform();
     window.addEventListener("auxclick", handleAuxClick);
@@ -1154,13 +1174,7 @@
   });
 </script>
 
-<svelte:window
-  on:keydown={(e) => {
-    if (e.key === "Backspace" || e.key === "Escape") {
-      handleBack();
-    }
-  }}
-/>
+<svelte:window onkeydown={handleWindowKeydown} />
 
 <div
   class="mod-view default-scrollbar"
