@@ -584,13 +584,14 @@
 
   const installMod = async (mod: Mod, isUpdate = false) => {
     if (usesCatalogInstall(mod)) {
-      const installed = await installCatalogEntry(mod, {
+      await installCatalogEntry(mod, {
         source: pickerSource(mod, isUpdate),
       });
-      if (installed) {
-        await getAllInstalledMods();
-        refreshTrackedSource();
-      }
+      // Even a failed run may have installed dependencies, so always re-plan
+      await getAllInstalledMods();
+      refreshTrackedSource();
+      planKey = "";
+      void loadPlan(mod, selectedSource);
       return;
     }
     // Guard: don't allow re-entrancy while already loading

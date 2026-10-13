@@ -149,3 +149,76 @@ describe("ModView Escape handling", () => {
     input.remove();
   });
 });
+
+describe("ModView dependency plan", () => {
+  const tsMod: Mod = {
+    ...mod,
+    title: "JokerDisplay",
+    _dirName: "ts:nh6574-JokerDisplay",
+    source: "thunderstore",
+    thunderstore: {
+      namespace: "nh6574",
+      name: "JokerDisplay",
+      full_name: "nh6574-JokerDisplay",
+      package_url: "",
+    } as Mod["thunderstore"],
+  };
+  const plan = {
+    mod_id: "ts:nh6574-JokerDisplay",
+    mod_title: "JokerDisplay",
+    source: "thunderstore",
+    version: "1.0.0",
+    steps: [
+      {
+        source: "thunderstore",
+        catalog_id: "ts:nh6574-JokerDisplay",
+        title: "JokerDisplay",
+        full_name: "nh6574-JokerDisplay",
+        version: "1.0.0",
+        is_root: true,
+        deprecated: false,
+      },
+    ],
+    satisfied: [],
+    lovely: null,
+    steamodded: null,
+    talisman: null,
+    missing: [],
+    warnings: [],
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === "plan_catalog_install") return plan;
+      if (command === "install_catalog_mod") {
+        return { plan, installed: [], warnings: [] };
+      }
+      return commandResult(command);
+    });
+    resetModalStack();
+    currentModView.set(tsMod);
+  });
+
+  afterEach(() => {
+    resetModalStack();
+    currentModView.set(null);
+  });
+
+  it("plans again after an install", async () => {
+    const { getByRole } = render(ModView, { props: { mod: tsMod } });
+    const planCalls = () =>
+      invokeMock.mock.calls.filter(([c]) => c === "plan_catalog_install")
+        .length;
+    await vi.waitFor(() => expect(planCalls()).toBe(1));
+
+    getByRole("button", { name: /download/i }).click();
+    await vi.waitFor(() =>
+      expect(
+        invokeMock.mock.calls.some(([c]) => c === "install_catalog_mod"),
+      ).toBe(true),
+    );
+    // One plan for the install itself and a fresh one for the view
+    await vi.waitFor(() => expect(planCalls()).toBe(3));
+  });
+});
