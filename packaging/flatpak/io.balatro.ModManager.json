@@ -36,6 +36,7 @@
         "append-path": "/usr/lib/sdk/node20/bin:/usr/lib/sdk/rust-stable/bin",
         "env": {
           "CARGO_TARGET_DIR": "/run/build/balatro-mod-manager/target",
+          "TAR_OPTIONS": "--no-same-owner",
           "npm_config_cache": "/run/build/balatro-mod-manager/.npm",
           "NPM_CONFIG_FUND": "false",
           "NPM_CONFIG_AUDIT": "false"
