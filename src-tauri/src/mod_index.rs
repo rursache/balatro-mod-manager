@@ -358,17 +358,14 @@ pub fn parse_meta(bytes: &[u8]) -> Result<ModMeta, String> {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+/// A meta.json without `last-updated` keeps 0 so the UI hides the date instead of showing
+/// the sync time
 pub fn meta_to_item(
     dir: &str,
     mut meta: ModMeta,
     description: String,
     thumb_path: Option<&str>,
     commit_sha: &str,
-    prev: Option<&IndexEntry>,
-    meta_changed: bool,
-    initial_sync: bool,
-    now: u64,
 ) -> ArchiveModItem {
     let (dir_author, dir_title) = dir.split_once('@').unwrap_or(("", dir));
     if meta.title.trim().is_empty() {
@@ -384,13 +381,6 @@ pub fn meta_to_item(
         .download_url
         .map(|u| u.trim().to_string())
         .filter(|u| !u.is_empty());
-    if meta.last_updated == 0 {
-        meta.last_updated = match prev {
-            Some(p) if !meta_changed => p.item.meta.last_updated,
-            _ if initial_sync => 0,
-            _ => now,
-        };
-    }
     ArchiveModItem {
         dir_name: dir.to_string(),
         meta,
@@ -444,8 +434,6 @@ fn build_entries(
     groups: &BTreeMap<String, DirFiles>,
     fetched: &HashMap<(String, FileKind), FetchResult>,
     head: &str,
-    initial_sync: bool,
-    now: u64,
 ) -> (BTreeMap<String, IndexEntry>, bool) {
     let mut out = BTreeMap::new();
     let mut all_ok = true;
@@ -460,13 +448,13 @@ fn build_entries(
             }
         };
 
-        let (meta, meta_changed) = match fetched.get(&(dir.clone(), FileKind::Meta)) {
+        let meta = match fetched.get(&(dir.clone(), FileKind::Meta)) {
             None => match old {
-                Some(o) => (o.item.meta.clone(), false),
+                Some(o) => o.item.meta.clone(),
                 None => continue,
             },
             Some(Ok(Some(bytes))) => match parse_meta(bytes) {
-                Ok(meta) => (meta, true),
+                Ok(meta) => meta,
                 Err(e) => {
                     log::warn!("Mod index: invalid meta.json in '{dir}': {e}");
                     keep_old(&mut out);
@@ -510,17 +498,7 @@ fn build_entries(
         };
 
         let thumb_path = files.thumb.as_ref().map(|(p, _)| p.clone());
-        let item = meta_to_item(
-            dir,
-            meta,
-            description,
-            thumb_path.as_deref(),
-            head,
-            old,
-            meta_changed,
-            initial_sync,
-            now,
-        );
+        let item = meta_to_item(dir, meta, description, thumb_path.as_deref(), head);
         out.insert(
             dir.clone(),
             IndexEntry {
@@ -831,9 +809,7 @@ async fn refresh(
     );
 
     let fetched = fetch_all(client, &head, &plan.to_fetch).await;
-    let initial_sync = cache.commit_sha.is_none();
-    let (entries, all_ok) =
-        build_entries(&cache.entries, &groups, &fetched, &head, initial_sync, now);
+    let (entries, all_ok) = build_entries(&cache.entries, &groups, &fetched, &head);
 
     // Thumbnails used to be keyed by title and are now keyed by catalog id, drop both
     let mut stale_titles: Vec<String> = Vec::new();
@@ -1254,10 +1230,6 @@ mod tests {
             "desc".into(),
             Some("mods/Author@Cool Mod/thumbnail.jpg"),
             SHA,
-            None,
-            true,
-            true,
-            42,
         );
         assert_eq!(it.dir_name, "Author@Cool Mod");
         assert_eq!(it.meta.title, "Cool Mod");
@@ -1286,10 +1258,6 @@ mod tests {
             String::new(),
             None,
             SHA,
-            None,
-            true,
-            true,
-            42,
         );
         assert!(!no_thumb.has_thumbnail);
         assert_eq!(no_thumb.image_url, "");
@@ -1297,35 +1265,14 @@ mod tests {
     }
 
     #[test]
-    fn last_updated_rules() {
+    fn missing_last_updated_stays_hidden() {
+        let run = |meta: ModMeta| meta_to_item("a@b", meta, String::new(), None, SHA).meta;
         let with_ts = ModMeta {
             last_updated: 7,
             ..Default::default()
         };
-        let run = |meta: ModMeta, prev: Option<&IndexEntry>, changed: bool, initial: bool| {
-            meta_to_item(
-                "a@b",
-                meta,
-                String::new(),
-                None,
-                SHA,
-                prev,
-                changed,
-                initial,
-                99,
-            )
-            .meta
-            .last_updated
-        };
-        assert_eq!(run(with_ts, None, true, true), 7);
-
-        let mut prev_item = item("a@b", "b", "");
-        prev_item.meta.last_updated = 55;
-        let prev = entry("m", None, None, prev_item);
-        assert_eq!(run(ModMeta::default(), Some(&prev), false, false), 55);
-        assert_eq!(run(ModMeta::default(), None, true, true), 0);
-        assert_eq!(run(ModMeta::default(), Some(&prev), true, false), 99);
-        assert_eq!(run(ModMeta::default(), None, true, false), 99);
+        assert_eq!(run(with_ts).last_updated, 7);
+        assert_eq!(run(ModMeta::default()).last_updated, 0);
     }
 
     #[test]
@@ -1415,12 +1362,12 @@ mod tests {
             Ok(Some(b"hello".to_vec())),
         );
 
-        let (out, all_ok) = build_entries(&prev, &groups, &fetched, SHA, false, 10);
+        let (out, all_ok) = build_entries(&prev, &groups, &fetched, SHA);
         assert!(!all_ok);
         assert_eq!(out["keep@x"].meta_sha, "m1");
         assert_eq!(out["keep@x"].item.description, "old desc");
         assert_eq!(out["new@x"].item.description, "hello");
-        assert_eq!(out["new@x"].item.meta.last_updated, 10);
+        assert_eq!(out["new@x"].item.meta.last_updated, 0);
         assert!(out["new@x"].item.has_thumbnail);
     }
 
