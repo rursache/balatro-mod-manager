@@ -110,6 +110,22 @@ pub fn get_backups_dir() -> Result<PathBuf, AppError> {
     Ok(config_dir.join("Balatro").join("backups"))
 }
 
+// Backup ids come from the frontend and must name a direct child of backups_dir
+fn backup_dir_for(backups_dir: &Path, backup_id: &str) -> Result<PathBuf, AppError> {
+    let mut components = Path::new(backup_id).components();
+    let single_normal = matches!(
+        (components.next(), components.next()),
+        (Some(std::path::Component::Normal(part)), None) if part == backup_id
+    );
+    if !single_normal || backup_id.contains(['/', '\\', ':', '\0']) {
+        return Err(AppError::InvalidState(format!(
+            "Invalid backup id '{}'",
+            backup_id
+        )));
+    }
+    Ok(backups_dir.join(backup_id))
+}
+
 /// Create a backup of the current mods folder and database state.
 ///
 /// # Arguments
@@ -397,7 +413,7 @@ pub async fn list_backups() -> Result<Vec<BackupMetadata>, AppError> {
 /// 5. Restore enabled/disabled states
 pub async fn restore_backup(backup_id: &str) -> Result<(), AppError> {
     let backups_dir = get_backups_dir()?;
-    let backup_dir = backups_dir.join(backup_id);
+    let backup_dir = backup_dir_for(&backups_dir, backup_id)?;
 
     if !backup_dir.exists() {
         return Err(AppError::InvalidState(format!(
@@ -679,7 +695,7 @@ async fn restore_enabled_states(mods_dir: &Path, disabled_mods: &[String]) -> Re
 /// Delete a backup by ID.
 pub async fn delete_backup(backup_id: &str) -> Result<(), AppError> {
     let backups_dir = get_backups_dir()?;
-    let backup_dir = backups_dir.join(backup_id);
+    let backup_dir = backup_dir_for(&backups_dir, backup_id)?;
 
     if !backup_dir.exists() {
         return Err(AppError::InvalidState(format!(
@@ -754,6 +770,18 @@ pub fn clear_interrupted_restore_marker() -> Result<(), AppError> {
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    #[test]
+    fn test_backup_dir_for_rejects_traversal() {
+        let backups_dir = Path::new("/backups");
+        assert_eq!(
+            backup_dir_for(backups_dir, "20240101_000000_manual").unwrap(),
+            backups_dir.join("20240101_000000_manual")
+        );
+        for id in ["", ".", "..", "../x", "a/b", "/abs", "a\\b", "C:x", "x\0"] {
+            assert!(backup_dir_for(backups_dir, id).is_err(), "{id:?}");
+        }
+    }
 
     #[test]
     fn test_backup_trigger_is_auto() {
