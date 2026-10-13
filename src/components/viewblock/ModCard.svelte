@@ -16,6 +16,7 @@
   import { lovelyPopupStore } from "../../stores/modStore";
   import { forceRefreshCache } from "../../stores/modCache";
   import LazyImage from "../common/LazyImage.svelte";
+  import LastUpdated from "./LastUpdated.svelte";
   import { cardScale, darkMode } from "../../stores/ui";
   import { normalizeColorPair, pickDarkPalette } from "../../utils/cardPalette";
   import { observeResize } from "../../utils/resize-observer-pool";
@@ -388,10 +389,7 @@
           Removed from index
         </span>
       {/if}
-      <!-- <span class="tag updated"> -->
-      <!-- 	<Clock size={13} /> -->
-      <!-- 	{mod.lastUpdated} -->
-      <!-- </span> -->
+      <LastUpdated value={mod.last_updated} class="tag updated" iconSize={11} />
     </div>
   </div>
 
@@ -562,7 +560,7 @@
     gap: 0.5rem;
   }
 
-  .tag {
+  .tags :global(.tag) {
     font-family: "M6X11", monospace;
     font-size: calc(0.75rem * var(--card-scale, 1));
     padding: 0.2rem 0.45rem;
@@ -577,6 +575,16 @@
     background: rgba(192, 64, 56, 0.92);
     color: #fff;
     border: 1px solid rgba(255, 255, 255, 0.25);
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
+  }
+
+  .tags :global(.tag.updated) {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    background: rgba(20, 20, 20, 0.72);
+    color: #fff;
+    border: 1px solid rgba(255, 255, 255, 0.2);
     box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
   }
 

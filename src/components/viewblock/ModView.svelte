@@ -10,6 +10,7 @@
     Layers,
   } from "lucide-svelte";
   import Github from "../GithubIcon.svelte";
+  import LastUpdated from "./LastUpdated.svelte";
   import { onMount, onDestroy } from "svelte";
   import {
     currentModView,
@@ -1324,8 +1325,8 @@
           </div>
         {/if}
         <div class="mod-stats">
-          <!-- <span><Clock size={16} /> {mod.lastUpdated}</span> -->
           <span><User size={16} /> {mod.publisher}</span>
+          <LastUpdated value={mod.last_updated} />
         </div>
         {#if mod.repo || mod._dirName}
           <button
@@ -1703,7 +1704,7 @@
     align-items: center;
   }
 
-  .mod-stats span {
+  .mod-stats :global(span) {
     display: flex;
     align-items: center;
     gap: 0.5rem;
