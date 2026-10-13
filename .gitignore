@@ -21,3 +21,4 @@ build-dir
 
 # Test coverage
 coverage/
+/dist

@@ -120,9 +120,9 @@ Alternatively, if you would prefer to build Balatro Mod Manager yourself instead
 
 ## Build Prerequisites
 
-- [Rust](https://www.rust-lang.org/tools/install) (for the backend)
-- [Bun](https://bun.sh/) (for the frontend)
-- [Tauri CLI](https://tauri.app/v1/guides/getting-started/prerequisites#installing-the-tauri-cli)
+- [Rust via rustup](https://rustup.rs/) (for the backend)
+- [Bun](https://bun.sh/) (for the frontend, also provides the Tauri CLI through `bun tauri`)
+- [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/) for your OS
 - [Task](https://taskfile.dev/) (for running task commands)
   - **Arch Linux**: `sudo pacman -S go-task` (package is named `go-task` to avoid conflicts)
   - **Fedora**: `sudo dnf install go-task`
@@ -178,21 +178,12 @@ On Linux the manager currently supports the Steam version of Balatro only.
 1. Clone the repository & install bun's dependencies:
    ```sh
    git clone https://github.com/rursache/balatro-mod-manager.git
-   cd balatro-mod-manager && bun install --allow-scripts
+   cd balatro-mod-manager && bun install
    ```
-2. Run the task based on your OS
-   - For Windows:
-     ```sh
-     task release-windows
-     ```
-   - For macOS:
-     ```sh
-     task release-macos
-     ```
-   - For Linux:
-     ```sh
-     task release-linux
-     ```
+2. Build for your platform (see [Building Releases](#building-releases))
+   ```sh
+   task build:macos   # or build:windows, build:linux
+   ```
 
 ## Running the Project
 
@@ -207,16 +198,20 @@ To start the project in development mode, use the provided taskfile:
 
 > Linux/Wayland: on Wayland sessions the app now prefers X11 (XWayland) to avoid compositor protocol errors. Set `BMM_ALLOW_WAYLAND=1` before running if you want to keep native Wayland.
 
-### Production Mode
+### Building Releases
 
-To build the project for production:
+Every platform has one script in `scripts/` that writes its artifacts to `dist/<platform>/`. The Taskfile wraps them, and CI is meant to call the same scripts
 
-1. Build the release target (`release-windows` for Windows, `release-macos` for macOS):
-   ```sh
-   task release-windows # or task release-macos
-   ```
+| Task | Script | Output | Host requirements |
+|---|---|---|---|
+| `task build:macos` (`ARCH=universal\|arm64\|x86_64`) | `scripts/build-macos.sh` | `.dmg` and zipped `.app` | macOS with Xcode, `rustup target add aarch64-apple-darwin x86_64-apple-darwin` |
+| `task build:windows` | `scripts/build-windows.sh` | NSIS `-setup.exe` (plus `.msi` on Windows) | Windows natively, or macOS/Linux with `rustup target add x86_64-pc-windows-msvc`, `cargo install --locked cargo-xwin`, LLVM, LLD and NSIS (`brew install llvm lld makensis`) |
+| `task build:linux` | `scripts/build-linux.sh` | `.deb`, `.AppImage`, `.rpm` | Docker (OrbStack or Docker Desktop on macOS), the image comes from `packaging/Dockerfile` |
+| `task build:all` | all of the above | everything | macOS with all of the above |
 
-The built application will be located in the `src-tauri/target/release` directory and the installer paths will be shown at the end of the build process.
+Builds are ad hoc signed on macOS and unsigned on Windows. Set `APPLE_SIGNING_IDENTITY` (and `APPLE_ID`, `APPLE_PASSWORD`, `APPLE_TEAM_ID` to notarize) before `build:macos` to sign with a real identity. `SKIP_FRONTEND=1` reuses an existing `build/` folder
+
+Cross compiling to Windows relies on a patched copy of `unrar_sys` in `src-tauri/vendor/unrar_sys` (see `PATCHED.md` there)
 
 ## Cleaning the Build
 

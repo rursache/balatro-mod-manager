@@ -19,7 +19,7 @@ tasks:
       - sh: command -v bun >/dev/null 2>&1
         msg: "Bun is required (used by SvelteKit dev)"
     cmds:
-      - cmd: cargo tauri dev
+      - cmd: bun tauri dev
   dev:web:
     desc: Start web-only dev server (Vite)
     preconditions:
@@ -29,87 +29,26 @@ tasks:
       - cmd: bun run dev
   default:
     - task: debug
-  release:
-    desc: Platform-appropriate release build (delegates by platform)
-    cmds:
-      - task: release-macos
-        vars:
-          ARCH: '{{.ARCH | default "universal"}}'
-      - task: release-windows
-      - task: release-linux
-  release-macos:
-    desc: Universal macOS build (Darwin)
-    platforms: [darwin]
-    env:
-      MACOSX_DEPLOYMENT_TARGET: "{{.MACOSX_DEPLOYMENT_TARGET}}"
-    preconditions:
-      - sh: 'case "${ARCH:-universal}" in universal|arm64|x86_64) ;; *) exit 1;; esac'
-        msg: "ARCH must be one of: universal, arm64, x86_64 (e.g., task release-macos ARCH=arm64)"
-      - sh: 'test "${ARCH:-universal}" != "arm64" || rustup target list --installed | grep -q "^aarch64-apple-darwin$"'
-        msg: "Install target: rustup target add aarch64-apple-darwin"
-      - sh: 'test "${ARCH:-universal}" != "x86_64" || rustup target list --installed | grep -q "^x86_64-apple-darwin$"'
-        msg: "Install target: rustup target add x86_64-apple-darwin"
-      - sh: 'test "${ARCH:-universal}" != "universal" || (rustup target list --installed | grep -q "^aarch64-apple-darwin$" && rustup target list --installed | grep -q "^x86_64-apple-darwin$")'
-        msg: "Install both targets: rustup target add aarch64-apple-darwin x86_64-apple-darwin"
-    cmds:
-      - cmd: |
-          case "${ARCH:-universal}" in
-            universal) TARGET="universal-apple-darwin" ;;
-            arm64)     TARGET="aarch64-apple-darwin" ;;
-            x86_64)    TARGET="x86_64-apple-darwin" ;;
-          esac
-          MACOSX_DEPLOYMENT_TARGET={{.MACOSX_DEPLOYMENT_TARGET}} cargo tauri build --target "$TARGET" --verbose
-  release-windows:
-    desc: Windows production build
-    platforms: [windows]
-    cmds:
-      - cmd: cargo tauri build --target x86_64-pc-windows-msvc --verbose
-  release-linux:
-    desc: Linux production build
-    platforms: [linux]
-    env:
-      NO_STRIP: "1"
-    cmds:
-      - cmd: cargo tauri build --target x86_64-unknown-linux-gnu --verbose
-  release-macos-production:
-    desc: Signed macOS build (local only, requires identity env)
-    platforms: [darwin]
-    preconditions:
-      - sh: test -n "${APPLE_SIGNING_IDENTITY:-}"
-        msg: "Set APPLE_SIGNING_IDENTITY in your environment (do not commit secrets)"
-      - sh: 'case "${ARCH:-universal}" in universal|arm64|x86_64) ;; *) exit 1;; esac'
-        msg: "ARCH must be one of: universal, arm64, x86_64 (e.g., task release-macos-production ARCH=arm64)"
-      - sh: 'test "${ARCH:-universal}" != "arm64" || rustup target list --installed | grep -q "^aarch64-apple-darwin$"'
-        msg: "Install target: rustup target add aarch64-apple-darwin"
-      - sh: 'test "${ARCH:-universal}" != "x86_64" || rustup target list --installed | grep -q "^x86_64-apple-darwin$"'
-        msg: "Install target: rustup target add x86_64-apple-darwin"
-      - sh: 'test "${ARCH:-universal}" != "universal" || (rustup target list --installed | grep -q "^aarch64-apple-darwin$" && rustup target list --installed | grep -q "^x86_64-apple-darwin$")'
-        msg: "Install both targets: rustup target add aarch64-apple-darwin x86_64-apple-darwin"
-    env:
-      MACOSX_DEPLOYMENT_TARGET: "{{.MACOSX_DEPLOYMENT_TARGET}}"
-      APPLE_SIGNING_IDENTITY: "{{.APPLE_SIGNING_IDENTITY}}"
-    cmds:
-      - cmd: |
-          case "${ARCH:-universal}" in
-            universal) TARGET="universal-apple-darwin" ;;
-            arm64)     TARGET="aarch64-apple-darwin" ;;
-            x86_64)    TARGET="x86_64-apple-darwin" ;;
-          esac
-          cargo tauri build --target "$TARGET" --verbose
-  release-macos-arm:
-    desc: macOS build for arm64 (Darwin convenience task)
+  build:macos:
+    desc: macOS .app and .dmg into dist/macos (ARCH=universal|arm64|x86_64, default universal)
     platforms: [darwin]
     cmds:
-      - task: release-macos
-        vars:
-          ARCH: arm64
-  release-macos-x64:
-    desc: macOS build for x86_64 (Darwin convenience task)
+      - cmd: scripts/build-macos.sh {{.ARCH | default "universal"}}
+  build:windows:
+    desc: Windows x64 installer into dist/windows (cross compiled with cargo-xwin outside Windows)
+    cmds:
+      - cmd: scripts/build-windows.sh
+  build:linux:
+    desc: Linux x64 deb, AppImage and rpm into dist/linux (built in Docker)
+    cmds:
+      - cmd: scripts/build-linux.sh
+  build:all:
+    desc: Build every platform into dist/ (macOS host)
     platforms: [darwin]
     cmds:
-      - task: release-macos
-        vars:
-          ARCH: x86_64
+      - task: build:macos
+      - cmd: SKIP_FRONTEND=1 scripts/build-windows.sh
+      - cmd: SKIP_FRONTEND=1 scripts/build-linux.sh
   update-frontend-deps:
     desc: Update frontend dependencies
     preconditions:
@@ -183,7 +122,7 @@ tasks:
       - cmd: cd ./src-tauri/bmm-lib && cargo clean
         silent: true
   clean-ui:
-    desc: Clean frontend build artifacts
+    desc: Clean frontend build artifacts and dist/
     cmds:
       - cmd: rm -rf .svelte-kit build dist 2>/dev/null || true
   flatpak:build:
