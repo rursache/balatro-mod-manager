@@ -66,6 +66,29 @@ describe("sortMods", () => {
     ]);
   });
 
+  it("sorts by downloads with unknown counts last", () => {
+    const withDownloads = (title: string, downloads?: number | null) => ({
+      ...mod(title),
+      downloads,
+    });
+    const input = [
+      withDownloads("index only"),
+      withDownloads("small", 10),
+      withDownloads("big", 5000),
+      withDownloads("none", null),
+      withDownloads("zero", 0),
+      withDownloads("also big", 5000),
+    ];
+    expect(titles(sortMods(input, SortOption.DownloadsDesc))).toEqual([
+      "also big",
+      "big",
+      "small",
+      "zero",
+      "index only",
+      "none",
+    ]);
+  });
+
   it("does not mutate its input", () => {
     const input = [mod("b"), mod("a")];
     sortMods(input, SortOption.NameAsc);

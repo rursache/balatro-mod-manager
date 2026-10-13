@@ -19,7 +19,20 @@
     };
   }
   import { fuzzySearch } from "../../utils/fuzzy";
-  import { isBrowsableMod } from "../../utils/installedPlaceholders";
+  import {
+    findInstalledRow,
+    indexInstalledRows,
+    isBrowsableMod,
+  } from "../../utils/installedPlaceholders";
+  import { passesCatalogFilters } from "../../utils/catalogFilters";
+  import { usesCatalogInstall } from "../../utils/catalogItems";
+  import { installCatalogEntry } from "../../stores/catalogInstall";
+  import {
+    hideAiGeneratedMods,
+    showDeprecatedMods,
+    showNsfwMods,
+    thunderstoreEnabled,
+  } from "../../stores/catalogFilters";
   import { currentModView } from "../../stores/modStore";
   import { invoke } from "@tauri-apps/api/core";
   import { fetchCachedMods } from "../../stores/modCache";
@@ -74,8 +87,9 @@
 
     try {
       await getAllInstalledMods();
-      const installedMod = installedMods.find(
-        (m) => m.name.toLowerCase() === mod.title.toLowerCase(),
+      const installedMod = findInstalledRow(
+        mod,
+        indexInstalledRows(installedMods),
       );
 
       if (isCoreMod) {
@@ -99,7 +113,7 @@
           return;
         }
         await invoke("remove_installed_mod", {
-          name: mod.title,
+          name: installedMod.name,
           path: installedMod.path,
         });
         installationStatus.update((s) => ({
@@ -123,6 +137,11 @@
   };
 
   const installMod = async (mod: Mod) => {
+    if (usesCatalogInstall(mod)) {
+      const indexOnly = !$thunderstoreEnabled && mod.source === "merged";
+      await installCatalogEntry(mod, { source: indexOnly ? "index" : null });
+      return;
+    }
     // Guard: don't allow re-entrancy while already loading
     if ($loadingStates[mod.title]) return;
     // Set loading immediately to prevent double-clicks
@@ -216,7 +235,9 @@
     if (!mod) return false;
 
     await getAllInstalledMods();
-    const status = installedMods.some((m) => m.name === mod.title);
+    const status = Boolean(
+      findInstalledRow(mod, indexInstalledRows(installedMods)),
+    );
 
     // Only update the store if the status has changed
     const currentStatus = $installationStatus[mod.title];
@@ -290,7 +311,16 @@
       const searchTerm = searchQuery.toLowerCase();
       const results = fuzzySearch(haystack, searchTerm);
 
-      searchResults = results.map((idx) => mods[idx]);
+      const filters = {
+        thunderstoreEnabled: $thunderstoreEnabled,
+        showNsfw: $showNsfwMods,
+        hideAiGenerated: $hideAiGeneratedMods,
+        showDeprecated: $showDeprecatedMods,
+        source: "all" as const,
+      };
+      searchResults = results
+        .map((idx) => mods[idx])
+        .filter((m) => m && passesCatalogFilters(m, filters));
     } catch (error) {
       console.error("Search failed:", error);
       searchResults = [];

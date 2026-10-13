@@ -11,6 +11,13 @@ import {
   searchResults,
 } from "../../stores/modStore";
 import { descriptionsStore } from "../../stores/descriptions";
+import {
+  hideAiGeneratedMods,
+  showDeprecatedMods,
+  showNsfwMods,
+  sourceFilter,
+  thunderstoreEnabled,
+} from "../../stores/catalogFilters";
 
 const invokeMock = vi.hoisted(() => vi.fn());
 const addMessageMock = vi.hoisted(() => vi.fn());
@@ -175,6 +182,46 @@ describe("Settings view", () => {
     expect(get(catalogLastRefreshed)).toBeNull();
     expect(get(cachedVersions)).toEqual({ steamodded: [], talisman: [] });
     expect(get(descriptionsStore)).toEqual({});
+  });
+
+  it("toggles and persists the catalog filters", async () => {
+    sourceFilter.set("thunderstore");
+    render(Settings);
+
+    const ts = screen.getByRole("checkbox", { name: "Thunderstore Mods" });
+    const nsfw = screen.getByRole("checkbox", { name: "Show NSFW Mods" });
+    const ai = screen.getByRole("checkbox", { name: "Hide AI Generated Mods" });
+    const deprecated = screen.getByRole("checkbox", {
+      name: "Show Deprecated Mods",
+    });
+    expect((ts as HTMLInputElement).checked).toBe(true);
+    expect((nsfw as HTMLInputElement).checked).toBe(false);
+    expect((ai as HTMLInputElement).checked).toBe(false);
+    expect((deprecated as HTMLInputElement).checked).toBe(false);
+
+    await fireEvent.click(nsfw);
+    await fireEvent.click(ai);
+    await fireEvent.click(deprecated);
+    await fireEvent.click(ts);
+
+    expect(get(showNsfwMods)).toBe(true);
+    expect(get(hideAiGeneratedMods)).toBe(true);
+    expect(get(showDeprecatedMods)).toBe(true);
+    expect(get(thunderstoreEnabled)).toBe(false);
+    expect(get(sourceFilter)).toBe("all");
+    expect(mockStorage["catalog.showNsfw"]).toBe("true");
+    expect(mockStorage["catalog.hideAiGenerated"]).toBe("true");
+    expect(mockStorage["catalog.showDeprecated"]).toBe("true");
+    expect(mockStorage["catalog.thunderstoreEnabled"]).toBe("false");
+
+    for (const store of [
+      showNsfwMods,
+      hideAiGeneratedMods,
+      showDeprecatedMods,
+    ]) {
+      store.set(false);
+    }
+    thunderstoreEnabled.set(true);
   });
 
   it("has no analytics or privacy toggle", async () => {

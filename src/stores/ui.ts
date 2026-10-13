@@ -38,7 +38,7 @@ function createPersistentNumber(
   return store;
 }
 
-function createPersistentBoolean(key: string, fallback: boolean) {
+export function createPersistentBoolean(key: string, fallback: boolean) {
   const isBrowser = typeof window !== "undefined";
   let initial = fallback;
   if (isBrowser) {

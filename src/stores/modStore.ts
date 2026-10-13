@@ -5,6 +5,40 @@ import {
 } from "../utils/storage-quota";
 import { ensureCatalogSchema } from "../utils/catalogSchema";
 
+/** Where a catalog entry comes from, `merged` entries are listed by both */
+export type CatalogSource = "index" | "thunderstore" | "merged";
+export type InstallSourceName = "index" | "thunderstore";
+
+export interface ThunderstoreVersionInfo {
+  version: string;
+  deps: string[];
+  date: string;
+  size: number;
+}
+
+export interface ThunderstoreInfo {
+  namespace: string;
+  name: string;
+  /** `Namespace-Name` */
+  full_name: string;
+  owner: string;
+  package_url: string;
+  latest_version: string;
+  /** Active versions, newest first */
+  versions?: ThunderstoreVersionInfo[];
+  download_url: string;
+  website_url: string;
+  icon_url: string;
+  downloads_total: number;
+  rating: number;
+  deprecated: boolean;
+  nsfw: boolean;
+  ai_generated: boolean;
+  categories_raw: string[];
+  date_updated: string;
+  description: string;
+}
+
 export interface Mod {
   id?: string;
   title: string;
@@ -35,6 +69,15 @@ export interface Mod {
   version?: string | null;
   installed: boolean;
   last_updated: number;
+  source?: CatalogSource;
+  /** Sources that list this mod, both for merged entries */
+  sources?: InstallSourceName[];
+  thunderstore?: ThunderstoreInfo | null;
+  /** Thunderstore download total, missing for index only mods */
+  downloads?: number | null;
+  deprecated?: boolean;
+  nsfw?: boolean;
+  aiGenerated?: boolean;
 }
 
 export interface LocalMod {
@@ -55,6 +98,7 @@ export enum SortOption {
   NameDesc = "name_desc",
   LastUpdatedAsc = "updated_asc",
   LastUpdatedDesc = "updated_desc",
+  DownloadsDesc = "downloads_desc",
 }
 
 export const backgroundEnabled = writable(false);
@@ -173,6 +217,10 @@ export interface InstalledMod {
   orphaned?: boolean;
   current_version?: string | null;
   dependencies?: string[];
+  /** "index" or "thunderstore" */
+  source?: string;
+  /** `Namespace-Name` for Thunderstore rows */
+  source_id?: string | null;
   // collection_hash: string | null;
 }
 
@@ -235,6 +283,18 @@ function persistModsCache(value: Mod[]) {
       _dirName: m._dirName,
       _installedPath: m._installedPath,
       _hasThumbnail: m._hasThumbnail ?? true,
+      id: m.id,
+      thumbnailUrl: m.thumbnailUrl,
+      source: m.source,
+      sources: m.sources,
+      downloads: m.downloads ?? null,
+      deprecated: m.deprecated,
+      nsfw: m.nsfw,
+      aiGenerated: m.aiGenerated,
+      // The version list is only needed by the detail view, the next sync refills it
+      thunderstore: m.thunderstore
+        ? { ...m.thunderstore, versions: undefined }
+        : m.thunderstore,
       // omit description and image fields (largest strings)
     }));
 

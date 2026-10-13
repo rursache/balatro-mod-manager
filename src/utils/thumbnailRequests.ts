@@ -33,27 +33,39 @@ export const FAILED_RETRY_MS = 5 * 60 * 1000;
 const pending = new Map<string, PendingThumb>();
 const failedAt = new Map<string, number>();
 
-export function requestThumbnail(title: string, url: string): ThumbnailRequest {
-  const failedTime = failedAt.get(title);
+/** Backend cache key, the catalog id when known so same named mods never share art */
+export function thumbnailKey(title: string, id?: string | null): string {
+  const trimmed = id?.trim();
+  return trimmed ? trimmed : title;
+}
+
+export function requestThumbnail(
+  title: string,
+  url: string,
+  id?: string | null,
+): ThumbnailRequest {
+  const key = thumbnailKey(title, id);
+  const args = key === title ? { title } : { title, id: key };
+  const failedTime = failedAt.get(key);
   if (failedTime !== undefined && Date.now() - failedTime < FAILED_RETRY_MS) {
     return { promise: Promise.resolve(null), release: () => {} };
   }
-  let entry = pending.get(title);
+  let entry = pending.get(key);
   if (!entry) {
     const created: PendingThumb = {
       promise: Promise.resolve(null),
       refs: 0,
       cancelled: false,
     };
-    created.promise = invoke<string | null>("fetch_thumbnail", { title, url })
+    created.promise = invoke<string | null>("fetch_thumbnail", { ...args, url })
       .catch(() => null)
       .then((path) => {
-        if (pending.get(title) === created) pending.delete(title);
-        if (path) failedAt.delete(title);
-        else if (!created.cancelled) failedAt.set(title, Date.now());
+        if (pending.get(key) === created) pending.delete(key);
+        if (path) failedAt.delete(key);
+        else if (!created.cancelled) failedAt.set(key, Date.now());
         return path ?? null;
       });
-    pending.set(title, created);
+    pending.set(key, created);
     entry = created;
   }
   const owned = entry;
@@ -64,12 +76,12 @@ export function requestThumbnail(title: string, url: string): ThumbnailRequest {
     release: () => {
       if (released) return;
       released = true;
-      if (pending.get(title) !== owned) return;
+      if (pending.get(key) !== owned) return;
       owned.refs -= 1;
       if (owned.refs > 0) return;
       owned.cancelled = true;
-      pending.delete(title);
-      invoke("cancel_thumbnail", { title }).catch(() => {});
+      pending.delete(key);
+      invoke("cancel_thumbnail", args).catch(() => {});
     },
   };
 }
