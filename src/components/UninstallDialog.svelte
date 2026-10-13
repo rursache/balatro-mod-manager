@@ -9,6 +9,7 @@
     updateAvailableStore,
   } from "../stores/modStore";
   import { forceRefreshCache } from "../stores/modCache";
+  import { modal } from "../utils/modalStack";
 
   // Component props for callbacks
   export let onUninstalled: (event: {
@@ -174,7 +175,11 @@
 </script>
 
 {#if show}
-  <div class="dialog-overlay" transition:fade={{ duration: 160 }}>
+  <div
+    class="dialog-overlay"
+    transition:fade={{ duration: 160 }}
+    use:modal={{ onEscape: closeDialog }}
+  >
     <div class="dialog-content" transition:scale={{ duration: 160 }}>
       <h2>Uninstall {modName}?</h2>
 
@@ -211,7 +216,9 @@
           >
             Force Remove Anyway
           </button>
-          <button class="cancel-button" onclick={closeDialog}> Cancel </button>
+          <button class="cancel-button" data-autofocus onclick={closeDialog}>
+            Cancel
+          </button>
         </div>
       {:else}
         <div class="actions">
@@ -223,7 +230,9 @@
               handleUninstall();
             }}>Confirm</button
           >
-          <button onclick={closeDialog} class="force-button">Cancel</button>
+          <button onclick={closeDialog} class="force-button" data-autofocus
+            >Cancel</button
+          >
         </div>
       {/if}
     </div>

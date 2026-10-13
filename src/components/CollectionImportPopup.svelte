@@ -6,6 +6,7 @@
     closeCollectionImport,
     importCollectionCode,
   } from "../stores/collections";
+  import { modal } from "../utils/modalStack";
 
   let importCode = $state("");
 
@@ -38,7 +39,7 @@
     role="button"
     tabindex="0"
     onpointerdown={close}
-    onkeydown={(e) => (e.key === "Escape" || e.key === "Esc") && close()}
+    use:modal={{ onEscape: close }}
   >
     <div
       class="import-modal"
@@ -47,15 +48,13 @@
       tabindex="-1"
       transition:scale={{ duration: 160, start: 0.96 }}
       onpointerdown={(e) => e.stopPropagation()}
-      onkeydown={(e) => (e.key === "Escape" || e.key === "Esc") && close()}
     >
       <h3>Import collection</h3>
       <p class="subtitle">Paste a collection code.</p>
       <textarea
         class="import-textarea"
         placeholder="BMMCOLL1:..."
-        bind:value={importCode}
-      ></textarea>
+        bind:value={importCode}></textarea>
       <div class="import-actions">
         <button class="ghost neutral" type="button" onclick={close}>
           Cancel

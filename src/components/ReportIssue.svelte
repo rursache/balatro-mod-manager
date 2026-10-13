@@ -6,6 +6,7 @@
   import { openExternal } from "$lib/opener";
   import DiscordFab from "./DiscordFab.svelte";
   import { reportIssueStore } from "../stores/modStore";
+  import { modal } from "../utils/modalStack";
 
   let title = $state("");
   let description = $state("");
@@ -112,23 +113,7 @@
       addMessage("Failed to open logs folder.", "error");
     }
   }
-
-  function handleWindowKeydown(e: KeyboardEvent) {
-    if (e.key === "Escape" || e.key === "Esc") {
-      if (showCopyPrompt) {
-        showCopyPrompt = false;
-        e.preventDefault();
-        return;
-      }
-      if ($reportIssueStore.visible) {
-        close();
-        e.preventDefault();
-      }
-    }
-  }
 </script>
-
-<svelte:window onkeydown={handleWindowKeydown} />
 
 <!-- Floating report button + Discord link -->
 <div class="fab-group">
@@ -139,7 +124,15 @@
 </div>
 
 {#if $reportIssueStore.visible}
-  <div class="modal-background" transition:fade={{ duration: 160 }}>
+  <div
+    class="modal-background"
+    transition:fade={{ duration: 160 }}
+    use:modal={{
+      onEscape: () => {
+        if (!submitting) close();
+      },
+    }}
+  >
     <div
       class="modal"
       transition:scale={{ duration: 160, start: 0.95, opacity: 1 }}
@@ -189,7 +182,11 @@
 {/if}
 
 {#if showCopyPrompt}
-  <div class="modal-background" transition:fade={{ duration: 160 }}>
+  <div
+    class="modal-background"
+    transition:fade={{ duration: 160 }}
+    use:modal={{ onEscape: () => (showCopyPrompt = false) }}
+  >
     <div
       class="modal"
       transition:scale={{ duration: 160, start: 0.95, opacity: 1 }}

@@ -14,6 +14,7 @@
   import { invoke } from "@tauri-apps/api/core";
   import { addMessage } from "$lib/stores";
   import type { Mod } from "../stores/modStore";
+  import { modal } from "../utils/modalStack";
 
   const ensureDownloadUrl = (mod: Mod): Mod => {
     if (mod.downloadURL && mod.downloadURL.trim().length > 0) return mod;
@@ -98,9 +99,7 @@
     tabindex="0"
     transition:fade={{ duration: 150 }}
     onpointerdown={handleDismiss}
-    onkeydown={(e) => {
-      if (e.key === "Escape") handleDismiss();
-    }}
+    use:modal={{ onEscape: handleDismiss }}
   >
     <div
       class="dep-modal"

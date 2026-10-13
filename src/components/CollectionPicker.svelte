@@ -20,6 +20,7 @@
   import { get } from "svelte/store";
   import { invoke } from "@tauri-apps/api/core";
   import type { Mod } from "../stores/modStore";
+  import { modal } from "../utils/modalStack";
 
   let newName = $state("");
   let creating = $state(false);
@@ -285,14 +286,6 @@
   }
 </script>
 
-<svelte:window
-  onkeydown={(e) => {
-    if (e.key === "Escape" || e.key === "Esc") {
-      close();
-    }
-  }}
-/>
-
 {#if $collectionPickerStore.open}
   <div
     class="picker-backdrop"
@@ -300,6 +293,7 @@
     role="button"
     tabindex="0"
     onpointerdown={close}
+    use:modal={{ onEscape: close }}
     onkeydown={(e) => {
       const target = e.target as HTMLElement | null;
       if (target && target.closest("input, textarea, button, select")) return;
@@ -315,7 +309,6 @@
       tabindex="-1"
       transition:scale={{ duration: 160, start: 0.96 }}
       onpointerdown={(e) => e.stopPropagation()}
-      onkeydown={(e) => (e.key === "Escape" || e.key === "Esc") && close()}
     >
       <h3>Add to collection</h3>
       <p class="subtitle">

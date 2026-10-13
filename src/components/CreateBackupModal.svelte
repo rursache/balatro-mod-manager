@@ -1,6 +1,7 @@
 <script lang="ts">
   import { fade, scale } from "svelte/transition";
   import { createBackupPopupStore } from "../stores/modStore";
+  import { modal } from "../utils/modalStack";
   import { backupsStore } from "../stores/backups";
   import { addMessage } from "$lib/stores";
 
@@ -28,19 +29,20 @@
     createBackupPopupStore.set({ visible: false });
   }
 
-  function handleKeydown(e: KeyboardEvent) {
+  function handleInputKeydown(e: KeyboardEvent) {
     if (e.key === "Enter" && !isCreating) {
+      e.preventDefault();
       handleCreate();
-    } else if (e.key === "Escape") {
-      handleClose();
     }
   }
 </script>
 
-<svelte:window onkeydown={handleKeydown} />
-
 {#if $createBackupPopupStore.visible}
-  <div class="modal-overlay" transition:fade={{ duration: 160 }}>
+  <div
+    class="modal-overlay"
+    transition:fade={{ duration: 160 }}
+    use:modal={{ onEscape: handleClose }}
+  >
     <div
       class="modal-content"
       transition:scale={{ duration: 160, start: 0.96 }}
@@ -61,6 +63,7 @@
           type="text"
           placeholder="My backup (optional)"
           bind:value={backupName}
+          onkeydown={handleInputKeydown}
         />
       </div>
 

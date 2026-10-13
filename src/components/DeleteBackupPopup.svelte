@@ -1,6 +1,7 @@
 <script lang="ts">
   import { fade, scale } from "svelte/transition";
   import { deleteBackupPopupStore } from "../stores/modStore";
+  import { modal } from "../utils/modalStack";
   import { backupsStore } from "../stores/backups";
   import { addMessage } from "$lib/stores";
 
@@ -31,17 +32,17 @@
     });
   }
 
-  function handleKeydown(e: KeyboardEvent) {
-    if (e.key === "Escape" && !isProcessing) {
-      handleClose();
-    }
+  function handleEscape() {
+    if (!isProcessing) handleClose();
   }
 </script>
 
-<svelte:window onkeydown={handleKeydown} />
-
 {#if $deleteBackupPopupStore.visible}
-  <div class="dialog-overlay" transition:fade={{ duration: 160 }}>
+  <div
+    class="dialog-overlay"
+    transition:fade={{ duration: 160 }}
+    use:modal={{ onEscape: handleEscape }}
+  >
     <div
       class="dialog-content"
       transition:scale={{ duration: 160, start: 0.96 }}
@@ -64,6 +65,7 @@
         </button>
         <button
           class="cancel-button"
+          data-autofocus
           onclick={handleClose}
           disabled={isProcessing}
         >

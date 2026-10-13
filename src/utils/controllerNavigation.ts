@@ -3,7 +3,7 @@ export type Direction = "up" | "down" | "left" | "right";
 const CONTROLLER_FOCUS_ATTR = "data-controller-focus";
 const CONFIRM_BUTTON = 0;
 const CANCEL_BUTTONS = [1, 8];
-const FOCUSABLE_SELECTOR = [
+export const FOCUSABLE_SELECTOR = [
   "button",
   "input",
   "select",
@@ -79,6 +79,10 @@ export function clearControllerFocus(root: ParentNode = document) {
   root
     .querySelectorAll<HTMLElement>(`[${CONTROLLER_FOCUS_ATTR}]`)
     .forEach((element) => element.removeAttribute(CONTROLLER_FOCUS_ATTR));
+}
+
+export function isControllerFocusActive(): boolean {
+  return document.querySelector(`[${CONTROLLER_FOCUS_ATTR}='true']`) !== null;
 }
 
 export function getControllerFocusedElement(

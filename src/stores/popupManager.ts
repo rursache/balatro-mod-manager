@@ -27,6 +27,7 @@ import {
   depPromptStore,
   type DepPromptState,
 } from "./collections";
+import { isModalOpen, modalOpen } from "../utils/modalStack";
 
 /**
  * Animation duration for popup transitions (in ms).
@@ -703,3 +704,16 @@ export const hasActivePopup = derived(
     );
   },
 );
+
+/**
+ * True while a managed popup is visible or any modal is mounted, global
+ * shortcuts like Escape-to-go-back must stand down while this is set
+ */
+export const anyPopupOpen = derived(
+  [hasActivePopup, modalOpen],
+  ([$hasActivePopup, $modalOpen]) => $hasActivePopup || $modalOpen,
+);
+
+export function isAnyPopupOpen(): boolean {
+  return get(hasActivePopup) || isModalOpen();
+}

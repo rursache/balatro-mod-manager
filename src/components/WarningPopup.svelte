@@ -1,6 +1,7 @@
 <script lang="ts">
   import { fade, scale } from "svelte/transition";
   import { showWarningPopup } from "../stores/modStore";
+  import { modal } from "../utils/modalStack";
 
   export let visible: boolean = false;
   export let message: string = "";
@@ -16,19 +17,14 @@
     onCancel();
     showWarningPopup.update((p) => ({ ...p, visible: false }));
   }
-
-  function handleKeydown(event: KeyboardEvent) {
-    if (visible && event.key === "Escape") {
-      event.preventDefault();
-      handleCancel();
-    }
-  }
 </script>
 
-<svelte:window onkeydown={handleKeydown} />
-
 {#if visible}
-  <div class="modal-background" transition:fade={{ duration: 160 }}>
+  <div
+    class="modal-background"
+    transition:fade={{ duration: 160 }}
+    use:modal={{ onEscape: handleCancel }}
+  >
     <div
       class="modal"
       transition:scale={{ duration: 160, start: 0.95, opacity: 1 }}
@@ -36,7 +32,9 @@
       <h2>Warning</h2>
       <p>{message}</p>
       <div class="buttons">
-        <button class="cancel-button" on:click={handleCancel}>Cancel</button>
+        <button class="cancel-button" data-autofocus on:click={handleCancel}
+          >Cancel</button
+        >
         <button class="confirm-button" on:click={handleConfirm}>Confirm</button>
       </div>
     </div>

@@ -2,6 +2,7 @@
   import { fade, scale } from "svelte/transition";
   import { invoke } from "@tauri-apps/api/core";
   import { securityPopupStore } from "../stores/modStore";
+  import { modal } from "../utils/modalStack";
 
   let isLoading: boolean = false;
   let errorMessage: string | null = null;
@@ -33,10 +34,21 @@
     $securityPopupStore.onCancel();
     securityPopupStore.update((s) => ({ ...s, visible: false }));
   }
+
+  // Escape dismisses without acknowledging, it never quits the app
+  function handleDismiss() {
+    if (isLoading) return;
+    $securityPopupStore.onCancel();
+    securityPopupStore.update((s) => ({ ...s, visible: false }));
+  }
 </script>
 
 {#if $securityPopupStore.visible}
-  <div class="modal-background" transition:fade={{ duration: 160 }}>
+  <div
+    class="modal-background"
+    transition:fade={{ duration: 160 }}
+    use:modal={{ onEscape: handleDismiss }}
+  >
     <div
       class="modal"
       transition:scale={{ duration: 160, start: 0.95, opacity: 1 }}
@@ -60,6 +72,7 @@
         </button>
         <button
           class="confirm-button"
+          data-autofocus
           on:click={handleAcknowledge}
           disabled={isLoading}
         >

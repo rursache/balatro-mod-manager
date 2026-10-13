@@ -43,7 +43,9 @@
     if (e.key === "Enter" || e.key === " ") {
       e.preventDefault();
       toggle();
-    } else if (e.key === "Escape") {
+    } else if (e.key === "Escape" && isOpen) {
+      // Claim the key so the view or popup behind stays open
+      e.preventDefault();
       isOpen = false;
     } else if (e.key === "ArrowDown" && isOpen) {
       e.preventDefault();

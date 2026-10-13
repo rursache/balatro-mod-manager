@@ -2,6 +2,7 @@
   import { fade } from "svelte/transition";
   import { invoke } from "@tauri-apps/api/core";
   import { X } from "lucide-svelte";
+  import { modal } from "../utils/modalStack";
 
   export let show: boolean = false;
   export let onClose: () => void;
@@ -55,7 +56,11 @@
 </script>
 
 {#if show}
-  <div class="overlay" transition:fade={{ duration: 100 }}>
+  <div
+    class="overlay"
+    transition:fade={{ duration: 100 }}
+    use:modal={{ onEscape: onClose }}
+  >
     <div class="alert-box">
       <button class="close-button" on:click={onClose} class:hidden={isError}>
         <div class="close-icon-container">

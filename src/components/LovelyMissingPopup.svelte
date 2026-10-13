@@ -3,6 +3,7 @@
   import { invoke } from "@tauri-apps/api/core";
   import { addMessage } from "$lib/stores";
   import { lovelyPopupStore } from "../stores/modStore";
+  import { modal } from "../utils/modalStack";
 
   let isWindows = $state<boolean>(false);
   let balatroPath = $state<string | null>(null);
@@ -95,7 +96,11 @@
 </script>
 
 {#if $lovelyPopupStore.visible}
-  <div class="modal-background" transition:fade={{ duration: 160 }}>
+  <div
+    class="modal-background"
+    transition:fade={{ duration: 160 }}
+    use:modal={{ onEscape: close }}
+  >
     <div
       class="modal"
       transition:scale={{ duration: 160, start: 0.95, opacity: 1 }}
@@ -153,7 +158,9 @@
             Launch Anyway
           </button>
         {/if}
-        <button class="close-button" onclick={close}>Close</button>
+        <button class="close-button" data-autofocus onclick={close}
+          >Close</button
+        >
       </div>
     </div>
   </div>

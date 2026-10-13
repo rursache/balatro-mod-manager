@@ -26,6 +26,7 @@
   import { descriptionsStore } from "../../stores/descriptions";
   import { cardScale, darkMode } from "../../stores/ui";
   import { browser } from "$app/environment";
+  import { modal } from "../../utils/modalStack";
 
   let isReindexing = $state(false);
   let isClearingCache = $state(false);
@@ -245,10 +246,6 @@
   }
 
   function handleModalKeydown(event: KeyboardEvent) {
-    if (event.key === "Escape") {
-      closeHelpImage();
-      return;
-    }
     if (event.key === "Enter" || event.key === " ") {
       event.preventDefault();
       closeHelpImage();
@@ -421,8 +418,8 @@
             <div class="linux-note-content">
               <strong>Linux Steam launch:</strong>
               Set Steam launch options for Balatro to
-              <code>WINEDLLOVERRIDES="winmm=n,b" %command%</code> so Lovely
-              and mods load when using <code>steam -applaunch 2379780</code>.
+              <code>WINEDLLOVERRIDES="winmm=n,b" %command%</code> so Lovely and
+              mods load when using <code>steam -applaunch 2379780</code>.
               <div class="linux-note-actions">
                 <button
                   class="linux-copy-button"
@@ -509,6 +506,7 @@
               onclick={closeHelpImage}
               onkeydown={handleModalKeydown}
               transition:fade={{ duration: 120 }}
+              use:modal={{ onEscape: closeHelpImage }}
             >
               <div
                 class="image-modal-content"
@@ -546,8 +544,8 @@
             Launch command for Linux (Proton/Wine/Steam). Leave blank to use
             native LOVE. Use `{"{exe}"}` to place the Balatro.exe path, or
             `steam -applaunch 2379780` to launch via Steam. Lovely requires
-            `WINEDLLOVERRIDES=winmm=n,b` and uses the Proton Mods folder
-            (linked from your host Mods dir).
+            `WINEDLLOVERRIDES=winmm=n,b` and uses the Proton Mods folder (linked
+            from your host Mods dir).
           </p>
         {/if}
       </div>

@@ -1,9 +1,9 @@
 <script lang="ts">
   import { fade, scale } from "svelte/transition";
-  import { onMount, onDestroy } from "svelte";
   import { openExternal } from "$lib/opener";
   import { updatePopupStore } from "../stores/modStore";
   import { APP_RELEASES_URL } from "../constants/links";
+  import { modal } from "../utils/modalStack";
 
   async function handleDownload() {
     try {
@@ -24,24 +24,14 @@
     $updatePopupStore.onDontShow();
     updatePopupStore.update((s) => ({ ...s, visible: false }));
   }
-
-  let keyHandler: ((e: KeyboardEvent) => void) | null = null;
-  onMount(() => {
-    keyHandler = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && $updatePopupStore.visible) {
-        e.preventDefault();
-        handleClose();
-      }
-    };
-    window.addEventListener("keydown", keyHandler);
-  });
-  onDestroy(() => {
-    if (keyHandler) window.removeEventListener("keydown", keyHandler);
-  });
 </script>
 
 {#if $updatePopupStore.visible}
-  <div class="modal-background" transition:fade={{ duration: 160 }}>
+  <div
+    class="modal-background"
+    transition:fade={{ duration: 160 }}
+    use:modal={{ onEscape: handleClose }}
+  >
     <div
       class="modal"
       transition:scale={{ duration: 160, start: 0.95, opacity: 1 }}
@@ -59,7 +49,9 @@
         <button class="download-button" onclick={handleDownload}
           >Download</button
         >
-        <button class="close-button" onclick={handleClose}>Close</button>
+        <button class="close-button" data-autofocus onclick={handleClose}
+          >Close</button
+        >
         <button class="dontshow-button" onclick={handleDontShow}
           >Don't show anymore</button
         >

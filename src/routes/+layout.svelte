@@ -14,7 +14,7 @@
   import DepPrompt from "../components/DepPrompt.svelte";
   import { Window } from "@tauri-apps/api/window";
   // Initialize popup manager subscriptions
-  import { hasActivePopup, isPopupTransitioning } from "../stores/popupManager";
+  import { anyPopupOpen, isPopupTransitioning } from "../stores/popupManager";
 
   import "../app.css";
   import UpdateAvailablePopup from "../components/UpdateAvailablePopup.svelte";
@@ -157,8 +157,20 @@
     }
   }
 
+  // Start from the focused element so B behaves exactly like a keyboard Escape
   function dispatchEscape() {
-    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+    const active = document.activeElement;
+    const target =
+      active instanceof HTMLElement && active !== document.body
+        ? active
+        : window;
+    target.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "Escape",
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
   }
 
   function showExitConfirmation() {
@@ -174,7 +186,7 @@
   }
 
   function handleControllerCancel() {
-    if ($hasActivePopup || $currentModView) {
+    if ($anyPopupOpen || $currentModView) {
       dispatchEscape();
       return;
     }

@@ -3,6 +3,7 @@
   import { fade, scale } from "svelte/transition";
   import { invoke } from "@tauri-apps/api/core";
   import { requiresPopupStore } from "../stores/modStore";
+  import { modal } from "../utils/modalStack";
 
   let steamoddedInstalled = $state(false);
   let talismanInstalled = $state(false);
@@ -42,7 +43,11 @@
 </script>
 
 {#if $requiresPopupStore.visible}
-  <div class="popup-overlay" transition:fade={{ duration: 200 }}>
+  <div
+    class="popup-overlay"
+    transition:fade={{ duration: 200 }}
+    use:modal={{ onEscape: handleClose }}
+  >
     <div
       class="popup-content"
       transition:scale={{ duration: 200, start: 0.9, opacity: 0 }}
@@ -112,7 +117,9 @@
           <button class="proceed-button" onclick={handleProceedClick}>
             Download Anyway
           </button>
-          <button class="cancel-button" onclick={handleClose}> Close </button>
+          <button class="cancel-button" data-autofocus onclick={handleClose}>
+            Close
+          </button>
         </div>
       </div>
     </div>
