@@ -1,145 +1,330 @@
-name: "release-without-notarization"
+name: Release
+
 on:
+  release:
+    types: [published]
   workflow_dispatch:
-  workflow_run:
-    workflows: ["build-sign"] # Ensure this matches the actual name of your build workflow
-    types:
-      - completed
+    inputs:
+      tag:
+        description: Tag to build (e.g. v1.2.3)
+        required: true
+        type: string
+      dry_run:
+        description: Build, sign and notarize only, keep the assets as workflow artifacts
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.event.release.tag_name || inputs.tag }}
+  cancel-in-progress: false
+
 jobs:
-  prepare-release-notes:
+  meta:
+    name: Resolve version
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      pull-requests: read
     outputs:
-      release_notes: ${{ steps.notes.outputs.RELEASE_NOTES }}
-      app_version: ${{ steps.version.outputs.APP_VERSION }}
+      tag: ${{ steps.meta.outputs.tag }}
+      version: ${{ steps.meta.outputs.version }}
+      prerelease: ${{ steps.meta.outputs.prerelease }}
+      dry_run: ${{ steps.meta.outputs.dry_run }}
     steps:
-      - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-          fetch-tags: true
-      - name: Extract app version
-        id: version
-        run: |
-          # Adjust this grep command if your version format or file path differs
-          APP_VERSION=$(grep -m1 'version =' src-tauri/Cargo.toml | cut -d '"' -f2)
-          echo "APP_VERSION=$APP_VERSION" >> $GITHUB_OUTPUT
-      - name: Get previous tag
-        id: prev-tag
-        run: |
-          PREVIOUS_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
-          echo "PREVIOUS_TAG=$PREVIOUS_TAG" >> $GITHUB_OUTPUT
-      - name: Generate Release Notes
-        uses: orhun/git-cliff-action@v4
-        id: git-cliff
-        with:
-          config: cliff.toml
-          args: ${{ steps.prev-tag.outputs.PREVIOUS_TAG && format('{0}.. --tag v{1}', steps.prev-tag.outputs.PREVIOUS_TAG, steps.version.outputs.APP_VERSION) || format('--tag v{0}', steps.version.outputs.APP_VERSION) }}
+      - name: Resolve tag, version and mode
+        id: meta
         env:
-          OUTPUT: RELEASE_NOTES.md
-          GITHUB_REPO: ${{ github.repository }}
-      - name: Append FAQ to Release Notes
-        id: notes
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          RELEASE_PRERELEASE: ${{ github.event.release.prerelease }}
+          INPUT_TAG: ${{ inputs.tag }}
+          INPUT_DRY_RUN: ${{ inputs.dry_run }}
         run: |
-          cat >> RELEASE_NOTES.md << 'EOL'
+          if [ "$EVENT_NAME" = "release" ]; then
+            TAG="$RELEASE_TAG"
+            PRERELEASE="$RELEASE_PRERELEASE"
+            DRY_RUN=false
+          else
+            TAG="$INPUT_TAG"
+            DRY_RUN="$INPUT_DRY_RUN"
+            # Trust the release flag when the release exists, otherwise any semver prerelease counts
+            if ! PRERELEASE="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" --jq .prerelease 2>/dev/null)"; then
+              case "$TAG" in *-*) PRERELEASE=true ;; *) PRERELEASE=false ;; esac
+            fi
+          fi
+          VERSION="${TAG#v}"
+          if ! [[ "$VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::Tag '$TAG' is not a semver version like v1.2.3 or v1.2.3-beta.1"
+            exit 1
+          fi
+          if ! [[ "$VERSION" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)(-([0-9]+))?$ ]] \
+            || [ "${BASH_REMATCH[1]}" -gt 255 ] || [ "${BASH_REMATCH[2]}" -gt 255 ] \
+            || [ "${BASH_REMATCH[3]}" -gt 65535 ] || [ "${BASH_REMATCH[5]:-0}" -gt 65535 ]; then
+            echo "::warning::WiX cannot encode $VERSION, the Windows MSI is skipped and only the NSIS installer ships"
+          fi
+          {
+            echo "tag=$TAG"
+            echo "version=$VERSION"
+            echo "prerelease=$PRERELEASE"
+            echo "dry_run=$DRY_RUN"
+          } >> "$GITHUB_OUTPUT"
+          echo "Tag $TAG, version $VERSION, prerelease $PRERELEASE, dry run $DRY_RUN" >> "$GITHUB_STEP_SUMMARY"
 
-          ---
-          ❓ FAQ
-          Q: How do I know this isn't malware?
-          A: Check the source code and verify the digital signature details.
-          EOL
+  macos:
+    name: macOS universal
+    needs: meta
+    runs-on: macos-26
+    timeout-minutes: 90
+    env:
+      RELEASE_VERSION: ${{ needs.meta.outputs.version }}
+      BMM_VERSION: ${{ needs.meta.outputs.version }}
+      APP: dist/macos/Balatro Mod Manager.app
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: refs/tags/${{ needs.meta.outputs.tag }}
+          fetch-depth: 0
 
-          NOTES=$(cat RELEASE_NOTES.md)
-          echo "RELEASE_NOTES<<EOF" >> $GITHUB_OUTPUT
-          echo "$NOTES" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
-  create-release:
-    needs: prepare-release-notes
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: universal
+
+      - name: Build the universal .app
+        run: BUNDLES=app scripts/build-macos.sh universal
+
+      - name: Fetch signing toolkit
+        uses: actions/checkout@v7
+        with:
+          repository: RanduSoft/macos-signing
+          token: ${{ secrets.SIGNING_PAT }}
+          path: .signing
+          persist-credentials: false
+
+      - name: Sign, notarize and staple
+        uses: ./.signing
+        with:
+          app-path: ${{ env.APP }}
+          entitlements: src-tauri/Entitlements.plist
+
+      - name: Remove signing toolkit
+        if: always()
+        run: rm -rf .signing
+
+      - name: Verify Developer ID signature and staple
+        run: |
+          codesign --verify --deep --strict --verbose=2 "$APP"
+          codesign -dv --verbose=2 "$APP" 2>&1 | grep -E 'Authority=Developer ID Application'
+          codesign -dv --verbose=2 "$APP" 2>&1 | grep -E 'flags=.*runtime'
+          codesign -d --entitlements - "$APP"
+          xcrun stapler validate "$APP"
+          spctl --assess --type exec -vv "$APP"
+
+      - name: Package zip and dmg
+        run: |
+          OUT=dist/release
+          mkdir -p "$OUT"
+          NAME="Balatro-Mod-Manager-$RELEASE_VERSION-macos-universal"
+
+          ditto -c -k --keepParent "$APP" "$OUT/$NAME.zip"
+          CHECK="$RUNNER_TEMP/zip-check"
+          mkdir -p "$CHECK"
+          ditto -x -k "$OUT/$NAME.zip" "$CHECK"
+          xcrun stapler validate "$CHECK/Balatro Mod Manager.app"
+          spctl --assess --type exec -vv "$CHECK/Balatro Mod Manager.app"
+
+          STAGE="$RUNNER_TEMP/dmg-stage"
+          mkdir -p "$STAGE"
+          ditto "$APP" "$STAGE/Balatro Mod Manager.app"
+          ln -s /Applications "$STAGE/Applications"
+          # hdiutil sometimes fails with "Resource busy" on hosted runners, retry a few times
+          for attempt in 1 2 3 4 5; do
+            if hdiutil create -volname "Balatro Mod Manager" -srcfolder "$STAGE" -fs HFS+ \
+              -format UDZO -ov "$OUT/$NAME.dmg"; then
+              break
+            fi
+            [ "$attempt" -eq 5 ] && exit 1
+            sleep $((attempt * 5))
+          done
+          hdiutil verify "$OUT/$NAME.dmg"
+          ls -lh "$OUT"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-macos
+          path: dist/release/*
+          if-no-files-found: error
+
+  windows:
+    name: Windows x64
+    needs: meta
+    runs-on: windows-latest
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
+    env:
+      RELEASE_VERSION: ${{ needs.meta.outputs.version }}
+      BMM_VERSION: ${{ needs.meta.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: refs/tags/${{ needs.meta.outputs.tag }}
+          fetch-depth: 0
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build NSIS and MSI installers
+        run: scripts/build-windows.sh
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-windows
+          path: dist/windows/*
+          if-no-files-found: error
+
+  linux:
+    name: Linux x86_64
+    needs: meta
     runs-on: ubuntu-latest
-    # Add necessary permissions for SignPath action and release creation
+    timeout-minutes: 90
+    env:
+      RELEASE_VERSION: ${{ needs.meta.outputs.version }}
+      BMM_VERSION: ${{ needs.meta.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: refs/tags/${{ needs.meta.outputs.tag }}
+          fetch-depth: 0
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Build deb, AppImage and rpm in Docker
+        run: scripts/build-linux.sh
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-linux
+          path: dist/linux/*
+          if-no-files-found: error
+
+  # Optional, a Flatpak failure never blocks the other assets
+  flatpak:
+    name: Flatpak
+    needs: meta
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    continue-on-error: true
+    container:
+      image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-50
+      options: --privileged
+    env:
+      BMM_VERSION: ${{ needs.meta.outputs.version }}
+      BUNDLE: Balatro-Mod-Manager-${{ needs.meta.outputs.version }}-linux.flatpak
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: refs/tags/${{ needs.meta.outputs.tag }}
+
+      - name: Pass the app version into the Flatpak build
+        run: |
+          sed -i "s/\"env\": {/\"env\": {\n          \"BMM_VERSION\": \"$BMM_VERSION\",/" \
+            packaging/flatpak/io.balatro.ModManager.json
+          grep -n BMM_VERSION packaging/flatpak/io.balatro.ModManager.json
+
+      - uses: flatpak/flatpak-github-actions/flatpak-builder@v6
+        with:
+          manifest-path: packaging/flatpak/io.balatro.ModManager.json
+          bundle: ${{ env.BUNDLE }}
+          upload-artifact: false
+          cache-key: flatpak-builder-${{ needs.meta.outputs.tag }}
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-flatpak
+          path: ${{ env.BUNDLE }}
+          if-no-files-found: error
+
+  publish:
+    name: Publish
+    needs: [meta, macos, windows, linux, flatpak]
+    if: >-
+      ${{ !cancelled() && needs.meta.result == 'success' && needs.macos.result == 'success'
+      && needs.windows.result == 'success' && needs.linux.result == 'success' }}
+    runs-on: ubuntu-latest
     permissions:
       contents: write
-      actions: read # Required by SignPath action to read artifact details via GITHUB_TOKEN
     steps:
-      - name: Get workflow run info
-        run: |
-          echo "Triggering workflow run ID: ${{ github.event.workflow_run.id }}"
-          echo "Triggering workflow: ${{ github.event.workflow_run.name }}"
-          echo "Conclusion: ${{ github.event.workflow_run.conclusion }}"
-      # Only proceed if the triggering build workflow was successful
-      - name: Check triggering workflow conclusion
-        if: github.event.workflow_run.conclusion != 'success'
-        run: |
-          echo "Triggering workflow run was not successful (${{ github.event.workflow_run.conclusion }}). Skipping release."
-          exit 1
-      - name: Download all artifacts from triggering workflow
-        uses: dawidd6/action-download-artifact@v3
+      - uses: actions/download-artifact@v8
         with:
-          workflow: build-sign # Ensure this matches the actual name of your build workflow
-          run_id: ${{ github.event.workflow_run.id }}
-          path: artifacts
-          search_artifacts: true
-          check_artifacts: true # Fail if artifacts are missing/corrupt
-          if_no_artifact_found: fail # Fail the job if artifacts aren't found
-      - name: List downloaded artifacts
+          pattern: release-*
+          path: assets
+          merge-multiple: true
+
+      - name: Write checksums
         run: |
-          echo "Artifacts directory content:"
-          ls -R artifacts || echo "No artifacts directory found"
-          # Find the specific executable - adjust path if needed
-          find artifacts -type f -name '*.exe' -print -quit
-      - name: Upload unsigned files for signing
-        id: upload-unsigned-files
+          cd assets
+          if ! ls ./*.flatpak >/dev/null 2>&1; then
+            echo "::warning::No Flatpak bundle, publishing without it"
+          fi
+          sha256sum -- * > "$RUNNER_TEMP/checksums.txt"
+          mv "$RUNNER_TEMP/checksums.txt" checksums.txt
+          cat checksums.txt
+          {
+            echo '```'
+            cat checksums.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # The assets themselves are already attached to this run by the build jobs
+      - name: Keep the dry run checksums
+        if: needs.meta.outputs.dry_run == 'true'
         uses: actions/upload-artifact@v7
         with:
-          name: unsigned-files-${{ github.run_id }}
-          path: |
-            artifacts/**/*.exe
-            artifacts/**/*.msi
-          if-no-files-found: error
-          retention-days: 1
-      # Submit the uploaded artifact to SignPath for signing
-      - name: Submit SignPath Signing Request
-        uses: signpath/github-action-submit-signing-request@v1
-        id: signpath
+          name: checksums
+          path: assets/checksums.txt
+
+      - name: Upload assets to the release
+        if: needs.meta.outputs.dry_run != 'true'
+        uses: softprops/action-gh-release@v3
         with:
-          # Required SignPath Credentials and Configuration
-          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
-          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
-          project-slug: "balatro-mod-manager" # Replace with your SignPath Project Slug
-          signing-policy-slug: "release-signing" # Replace with your SignPath Policy Slug
-          artifact-configuration-slug: "zipped_exe_msi"
-          # Link to the artifact uploaded in the previous step
-          github-artifact-id: ${{ steps.upload-unsigned-files.outputs.artifact-id }}
-          # Action Configuration
-          wait-for-completion: true # Wait for signing to finish before proceeding
-          output-artifact-directory: "./signed-artifact" # Where the signed file will be downloaded
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          # Optional: Pass parameters if required by your SignPath Artifact Configuration
-          # parameters: |
-          #   version: "${{ needs.prepare-release-notes.outputs.app_version }}"
-          #   description: "Balatro Mod Manager Release"
-      - name: List signed artifacts
-        run: |
-          echo "Signed artifact directory content:"
-          ls -R signed-artifact || echo "No signed-artifact directory found"
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: v${{ needs.prepare-release-notes.outputs.app_version }}
-          name: Balatro Mod Manager v${{ needs.prepare-release-notes.outputs.app_version }} (Alpha Build) Pre-release
-          body: ${{ needs.prepare-release-notes.outputs.release_notes }}
-          draft: true
-          prerelease: true
-          # Upload original non-Windows artifacts AND the newly signed Windows executable
-          files: |
-            artifacts/**/*.dmg
-            artifacts/**/*.AppImage
-            artifacts/**/*.deb
-            artifacts/**/*.rpm
-            signed-artifact/**/*.exe
-            signed-artifact/**/*.msi
-            artifacts/**/*.flatpak
-          token: ${{ secrets.GITHUB_TOKEN }}
+          tag_name: ${{ needs.meta.outputs.tag }}
+          files: assets/*
+          fail_on_unmatched_files: true
+
+      - name: Trigger Homebrew tap update
+        if: needs.meta.outputs.dry_run != 'true' && needs.meta.outputs.prerelease != 'true'
+        uses: actions/github-script@v9
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.meta.outputs.tag }}
+        with:
+          github-token: ${{ secrets.TAP_GITHUB_TOKEN }}
+          script: |
+            await github.rest.actions.createWorkflowDispatch({
+              owner: 'rursache',
+              repo: 'homebrew-tap',
+              workflow_id: 'update-formula.yml',
+              ref: 'master',
+              inputs: {
+                formula: 'balatro-mod-manager',
+                tag: process.env.TAG,
+                repository: context.repo.owner + '/' + context.repo.repo
+              }
+            })
