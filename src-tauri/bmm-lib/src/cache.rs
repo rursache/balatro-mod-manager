@@ -516,7 +516,10 @@ mod tests {
             save_versions_cache("steamodded", &versions)?;
             let loaded = load_versions_cache("steamodded")?.expect("versions cache present");
             // Loading re-sorts newest first by numeric tag order
-            assert_eq!(loaded, vec!["26.1002.0".to_string(), "26.829.0".to_string()]);
+            assert_eq!(
+                loaded,
+                vec!["26.1002.0".to_string(), "26.829.0".to_string()]
+            );
             Ok(())
         })
     }
