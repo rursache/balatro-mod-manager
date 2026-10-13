@@ -1249,7 +1249,7 @@
             <Layers size={18} />
           </button>
 
-          {#if $installationStatus[mod.title] && $updateAvailableStore[mod.title]}
+          {#if $installationStatus[mod.title] && $updateAvailableStore[mod.title] && !mod.orphaned}
             <!-- Update button (when installed and update available) -->
             <button
               class="update-button"

@@ -388,6 +388,11 @@
         >
           Removed from index
         </span>
+        {#if mod.installedVersion}
+          <span class="tag version" title="Installed version">
+            {mod.installedVersion}
+          </span>
+        {/if}
       {/if}
       <LastUpdated value={mod.last_updated} class="tag updated" iconSize={11} />
     </div>
@@ -430,7 +435,7 @@
       </button>
     {/if}
 
-    {#if $installationStatus[mod.title] && $updateAvailableStore[mod.title]}
+    {#if $installationStatus[mod.title] && $updateAvailableStore[mod.title] && !mod.orphaned}
       <!-- Update button (when installed and update available) -->
       <button
         class="update-button"
@@ -469,13 +474,15 @@
       </button>
     {/if}
 
-    <button
-      class="collection-button"
-      title="Add to collection"
-      onclick={openCollections}
-    >
-      <Layers size={18} />
-    </button>
+    {#if !mod.orphaned}
+      <button
+        class="collection-button"
+        title="Add to collection"
+        onclick={openCollections}
+      >
+        <Layers size={18} />
+      </button>
+    {/if}
   </div>
 </div>
 
@@ -576,6 +583,18 @@
     color: #fff;
     border: 1px solid rgba(255, 255, 255, 0.25);
     box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
+  }
+
+  .tags .tag.version {
+    background: rgba(20, 20, 20, 0.72);
+    color: #fff;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
+    text-transform: none;
+    max-width: 7rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .tags :global(.tag.updated) {

@@ -4,10 +4,10 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { InstalledMod } from "./modStore";
 import { installationStatus, modsStore } from "./modStore";
-
-// Normalize mod names for matching (removes spaces, dashes, underscores and other special chars)
-const normalizeModName = (name: string) =>
-  name.toLowerCase().replace(/[^a-z0-9]/g, "");
+import {
+  normalizeModName,
+  reconcileInstalledPlaceholders,
+} from "../utils/installedPlaceholders";
 
 declare global {
   // eslint-disable-next-line no-unused-vars
@@ -109,6 +109,17 @@ function updateInstallationStatusDelta(added: string[], removed: string[]) {
   installationStatus.set(newStatus);
 }
 
+/**
+ * Mirrors installed DB rows into the mods list so mods missing from the
+ * catalog (orphaned or not loaded yet) still get a card in Installed Mods
+ */
+export function syncInstalledPlaceholders(installed: InstalledMod[]) {
+  const before = get(modsStore);
+  const after = reconcileInstalledPlaceholders(before, installed);
+  if (after !== before) modsStore.set(after);
+  updateInstallationStatus(installed);
+}
+
 // Create a self-contained cache system
 const createModCache = () => {
   // Private variables inside closure
@@ -139,9 +150,12 @@ const createModCache = () => {
               name: mod.name,
               path: mod.path,
               orphaned: mod.orphaned === true,
+              current_version: mod.current_version ?? null,
+              dependencies: mod.dependencies ?? [],
             }));
 
             cache.set(formattedMods);
+            syncInstalledPlaceholders(formattedMods);
             lastFetchTime = Date.now();
             return formattedMods;
           })();

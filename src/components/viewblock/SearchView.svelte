@@ -19,6 +19,7 @@
     };
   }
   import { fuzzySearch } from "../../utils/fuzzy";
+  import { isBrowsableMod } from "../../utils/installedPlaceholders";
   import { currentModView } from "../../stores/modStore";
   import { invoke } from "@tauri-apps/api/core";
   import { fetchCachedMods } from "../../stores/modCache";
@@ -260,7 +261,9 @@
     });
 
     // Subscribe to mods store - only rebuild index when count changes significantly
-    return modsStore.subscribe((currentMods) => {
+    return modsStore.subscribe((allMods) => {
+      // Mods the index dropped only show up in Installed Mods
+      const currentMods = allMods.filter(isBrowsableMod);
       mods = currentMods;
       // Only rebuild if mod count changed by more than 10% or first load
       const countDiff = Math.abs(currentMods.length - lastModCount);

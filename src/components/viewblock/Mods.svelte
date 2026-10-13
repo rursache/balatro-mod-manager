@@ -87,7 +87,13 @@
     checkModInCache,
     fetchCachedMods,
     forceRefreshCache,
+    syncInstalledPlaceholders,
   } from "../../stores/modCache";
+  import {
+    hasActionableUpdate,
+    isBrowsableMod,
+    isInstalledPlaceholder,
+  } from "../../utils/installedPlaceholders";
   import { updateAvailableStore } from "../../stores/modStore";
   import {
     modEnabledStore,
@@ -660,6 +666,7 @@
         // After mods load, update install status and local mods if needed
         try {
           const installed = await fetchCachedMods();
+          syncInstalledPlaceholders(installed);
           // Create a set of normalized installed mod names for fuzzy matching
           const installedNormalized = new Set(
             installed.map((mod) => normalizeModName(mod.name)),
@@ -892,7 +899,7 @@
   };
 
   let hasUpdatesAvailable = $derived(
-    Object.values($updateAvailableStore).some((value) => value === true),
+    hasActionableUpdate($modsStore, $updateAvailableStore),
   );
 
   let isUpdatingAll = $state(false);
@@ -906,7 +913,9 @@
       // Get all installed mods with available updates
       const modsToUpdate = $modsStore.filter(
         (mod) =>
-          $installationStatus[mod.title] && $updateAvailableStore[mod.title],
+          !mod.orphaned &&
+          $installationStatus[mod.title] &&
+          $updateAvailableStore[mod.title],
       );
 
       if (modsToUpdate.length === 0) {
@@ -1406,6 +1415,9 @@
 
     const mods: Mod[] = mapArchiveItems(items, cachedMap);
     const prunedCount = mergeIncomingMods(mods);
+    // Pruning drops catalog cards of installed mods the index removed, put
+    // them back as Installed placeholders right away
+    await seedInstalledPlaceholders();
 
     if (prunedCount > 0) {
       addMessage(
@@ -1421,24 +1433,17 @@
       changed: string[];
       orphan_total: number;
     }>("reconcile_orphan_mods", { remoteTitles: titles })
-      .then((res) => {
+      .then(async (res) => {
         if (!res || res.skipped) return;
+        // Pull the fresh orphan flags so dropped mods keep an Installed card
+        await seedInstalledPlaceholders(true);
         if (res.changed.length === 0) return;
-        const orphanedNow = new Set(
-          res.changed.filter((name) => !mods.some((m) => m.title === name)),
+        const orphanedNow = res.changed.filter(
+          (name) => !mods.some((m) => m.title === name),
         );
-        modsStore.update((arr) =>
-          arr.map((m) =>
-            orphanedNow.has(m.title)
-              ? { ...m, orphaned: true }
-              : mods.some((nm) => nm.title === m.title)
-                ? { ...m, orphaned: false }
-                : m,
-          ),
-        );
-        if (orphanedNow.size > 0) {
+        if (orphanedNow.length > 0) {
           addMessage(
-            `${orphanedNow.size} installed mod${orphanedNow.size === 1 ? "" : "s"} removed from index`,
+            `${orphanedNow.length} installed mod${orphanedNow.length === 1 ? "" : "s"} removed from index`,
             "info",
           );
         }
@@ -1781,10 +1786,14 @@
             existing.image.trim().length > 0 &&
             !/\bimages\/cover\.jpg$/i.test(existing.image.trim());
           const preferExistingDesc =
+            !isInstalledPlaceholder(existing) &&
             (existing.description?.trim().length ?? 0) > 0;
           out.push({
             ...existing,
             ...inc,
+            // Listed in the index again, so no longer orphaned
+            orphaned: false,
+            installedVersion: undefined,
             requires_steamodded:
               existing.requires_steamodded || inc.requires_steamodded,
             requires_talisman:
@@ -1808,7 +1817,27 @@
         if (!existing._dirName) {
           out.push(existing);
         } else if (pruneAllowed) {
-          prunedCount++;
+          const row = installedMods.find(
+            (m) =>
+              m.name.toLowerCase() === existing.title.toLowerCase() ||
+              normalizeModName(m.name) === normalizeModName(existing.title),
+          );
+          const taken =
+            row !== undefined &&
+            row.name !== existing.title &&
+            existingByTitle.has(row.name);
+          if (row && !taken) {
+            // Still installed, keep the card (and its cached art) as a placeholder
+            out.push({
+              ...existing,
+              title: row.name,
+              _dirName: undefined,
+              thumbnailUrl: undefined,
+              _installedPath: row.path,
+            });
+          } else {
+            prunedCount++;
+          }
         } else {
           out.push(existing);
         }
@@ -1818,51 +1847,10 @@
     return prunedCount;
   }
 
-  async function seedInstalledPlaceholders() {
+  async function seedInstalledPlaceholders(forceRefresh = false) {
     try {
-      // Load installed mods quickly from DB cache helper
-      installedMods = await fetchCachedMods();
-      if (!installedMods || installedMods.length === 0) return;
-      modsStore.update((arr) => {
-        const existingByTitle = new Map(arr.map((m) => [m.title, m]));
-        const orphanFromDb = new Map(
-          installedMods
-            .filter((m) => m.orphaned === true)
-            .map((m) => [m.name, true as const]),
-        );
-        const additions: Mod[] = installedMods
-          .filter((m) => !existingByTitle.has(m.name))
-          .map((m) => ({
-            title: m.name,
-            description: "",
-            image: "/images/cover.jpg",
-            colors: getRandomColorPair(),
-            categories: [],
-            requires_steamodded: false,
-            requires_talisman: false,
-            publisher: "Installed",
-            repo: "",
-            downloadURL: "",
-            folderName: m.name,
-            version: "",
-            installed: true,
-            last_updated: 0,
-            _hasThumbnail: false,
-            // Keep private installed path for potential future local reads
-            _installedPath: m.path,
-            orphaned: m.orphaned === true,
-          }));
-        const merged = additions.length ? [...additions, ...arr] : arr;
-        // Sync orphan flag onto existing entries that already had a card.
-        return merged.map((m) =>
-          orphanFromDb.has(m.title) ? { ...m, orphaned: true } : m,
-        );
-      });
-
-      // Immediately reflect installationStatus so filters show
-      for (const m of installedMods) {
-        installationStatus.update((s) => ({ ...s, [m.name]: true }));
-      }
+      installedMods = await fetchCachedMods(forceRefresh);
+      syncInstalledPlaceholders(installedMods);
     } catch (e) {
       console.warn("seedInstalledPlaceholders failed", e);
     }
@@ -1933,6 +1921,10 @@
 
   let filteredMods = $derived(
     $modsStore.filter((mod) => {
+      // Orphaned and placeholder cards only belong to Installed Mods
+      if ($currentCategory !== "Installed Mods" && !isBrowsableMod(mod)) {
+        return false;
+      }
       switch ($currentCategory) {
         case "Content":
           return (
@@ -2879,10 +2871,8 @@
     ) {
       // Category just switched to Installed Mods - reset virtual scroll limit
       renderLimitCatalog = 36;
+      // forceRefreshCache also adds cards for installed mods the catalog lacks
       refreshInstalledMods();
-      if (sortedAndFilteredMods.length === 0) {
-        seedInstalledPlaceholders();
-      }
     }
     prevCategory = cat;
   });
