@@ -66,7 +66,7 @@
         steamodded: string | null;
         installSteamodded: boolean;
       }
-    | { kind: "uninstall"; track: Track; removes: string[] };
+    | { kind: "uninstall"; track: Track; removes: string[]; keeps: Removal[] };
 
   const TRACK_NOTES: Record<Track, string> = {
     legacy: "The classic Multiplayer mod, casual lobbies without extra modes",
@@ -318,13 +318,14 @@
     if (!status || busy) return;
     const info = trackInfo(status, selectedTrack);
     if (!info?.installed) return;
-    const removes = [info.tracked_name ?? info.title];
-    if (selectedTrack === "api") {
-      for (const mode of status.gamemodes) {
-        if (mode.installed) removes.push(mode.tracked_name ?? mode.title);
-      }
-    }
-    confirm = { kind: "uninstall", track: selectedTrack, removes };
+    // The backend decides what goes, the dialog names exactly those folders
+    const preview = status.uninstall.find((p) => p.track === selectedTrack);
+    confirm = {
+      kind: "uninstall",
+      track: selectedTrack,
+      removes: (preview?.remove ?? []).map(removalLabel),
+      keeps: preview?.keep ?? [],
+    };
   }
 
   async function runUninstall(track: Track) {
@@ -864,12 +865,27 @@
         </p>
       {:else}
         <h3 id="mp-confirm-title">Uninstall {trackTitle(confirm.track)}?</h3>
-        <p>This removes</p>
-        <ul class="removal-list">
-          {#each confirm.removes as name (name)}
-            <li><strong>{name}</strong></li>
-          {/each}
-        </ul>
+        {#if confirm.removes.length > 0}
+          <p>This removes</p>
+          <ul class="removal-list">
+            {#each confirm.removes as name (name)}
+              <li><strong>{name}</strong></li>
+            {/each}
+          </ul>
+        {:else}
+          <p>BMM has nothing it can remove for this track</p>
+        {/if}
+        {#if confirm.keeps.length > 0}
+          <p>These stay in the Mods folder</p>
+          <ul class="removal-list">
+            {#each confirm.keeps as kept (kept.path)}
+              <li>
+                <strong>{removalLabel(kept)}</strong>
+                <span>{kept.reason}</span>
+              </li>
+            {/each}
+          </ul>
+        {/if}
       {/if}
 
       {#if confirm.kind !== "uninstall" && confirm.steamodded !== null}

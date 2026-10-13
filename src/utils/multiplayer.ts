@@ -73,6 +73,8 @@ export interface MultiplayerStatus {
   conflict: boolean;
   legacy_manual: InstalledCopy | null;
   gamemodes: GameModeInfo[];
+  /** What uninstalling each track removes and leaves alone */
+  uninstall: UninstallPreview[];
   readiness: ReadinessCheck[];
   copied_dlls: string[];
 }
@@ -84,6 +86,13 @@ export interface Removal {
   tracked_name: string | null;
   replaced_by: string | null;
   reason: string;
+}
+
+export interface UninstallPreview {
+  track: Track;
+  remove: Removal[];
+  /** Git checkouts and third party mods built on the API, never deleted */
+  keep: Removal[];
 }
 
 export interface TrackPlan {

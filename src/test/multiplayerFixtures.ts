@@ -96,6 +96,7 @@ export function statusFixture(
         coming_soon: true,
       }),
     ],
+    uninstall: [],
     readiness: [],
     copied_dlls: [],
     ...overrides,

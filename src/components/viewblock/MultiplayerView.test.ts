@@ -247,6 +247,68 @@ describe("MultiplayerView", () => {
     expect(invoked("multiplayer_install")).toHaveLength(0);
   });
 
+  it("lists exactly what uninstalling the API removes and keeps", async () => {
+    const removal = (folder: string, role: "api" | "gamemode") => ({
+      role,
+      path: `/mods/${folder}`,
+      folder,
+      tracked_name: null,
+      replaced_by: null,
+      reason: "uninstall",
+    });
+    mockBackend(
+      statusFixture({
+        active_track: "api",
+        tracks: [
+          trackFixture({ track: "legacy" }),
+          trackFixture({
+            track: "api",
+            installed: true,
+            official: true,
+            installed_version: "0.1.2",
+          }),
+        ],
+        uninstall: [
+          { track: "legacy", remove: [], keep: [] },
+          {
+            track: "api",
+            remove: [
+              removal("BalatroMultiplayer-MultiplayerAPI", "api"),
+              removal("BalatroMultiplayer-MultiplayerSpeedrun", "gamemode"),
+            ],
+            keep: [
+              {
+                ...removal("MyMPMode", "gamemode"),
+                reason:
+                  "it is not an official game mode and stops loading without MultiplayerAPI",
+              },
+            ],
+          },
+        ],
+      }),
+      {
+        multiplayer_uninstall: { track: "api", removed: [], removed_dlls: [] },
+      },
+    );
+    await renderView();
+
+    await fireEvent.click(screen.getByRole("button", { name: /^uninstall$/i }));
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog.textContent).toContain("BalatroMultiplayer-MultiplayerAPI");
+    expect(dialog.textContent).toContain(
+      "BalatroMultiplayer-MultiplayerSpeedrun",
+    );
+    expect(dialog.textContent).toContain("These stay in the Mods folder");
+    expect(dialog.textContent).toContain("MyMPMode");
+
+    const buttons = screen.getAllByRole("button", { name: /^uninstall$/i });
+    await fireEvent.click(buttons[buttons.length - 1]);
+    await waitFor(() =>
+      expect(invoked("multiplayer_uninstall")).toHaveLength(1),
+    );
+    expect(invoked("multiplayer_uninstall")[0][1]).toEqual({ track: "api" });
+  });
+
   it("installs a fresh track without a dialog", async () => {
     mockBackend(statusFixture(), {
       multiplayer_plan: {

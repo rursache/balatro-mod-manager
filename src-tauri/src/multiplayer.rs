@@ -373,6 +373,62 @@ fn registry_mode_matches(mode: &RegistryMode, pkg: &TsPackage) -> bool {
     name == compact(&mode.id) || name == format!("multiplayer{}", compact(&mode.name))
 }
 
+/// Steamodded ids of official modes, for when neither an installed copy nor the API
+/// registry tells
+const KNOWN_MODE_IDS: [(&str, &str); 1] =
+    [("BalatroMultiplayer-MultiplayerSpeedrun", "MultiplayerSPDRN")];
+
+/// Steamodded id the package installs: from its installed files, the API registry or the
+/// ids known today
+fn mode_id_of(pkg: &TsPackage, detection: &Detection) -> Option<String> {
+    detection
+        .of(Role::Gamemode)
+        .find(|c| {
+            c.official
+                && c.package
+                    .as_deref()
+                    .is_some_and(|p| p.eq_ignore_ascii_case(&pkg.full_name))
+                && !c.mod_id.is_empty()
+        })
+        .map(|c| c.mod_id.clone())
+        .or_else(|| {
+            detection
+                .registry
+                .iter()
+                .find(|m| registry_mode_matches(m, pkg))
+                .map(|m| m.id.clone())
+        })
+        .or_else(|| {
+            KNOWN_MODE_IDS
+                .iter()
+                .find(|(name, _)| name.eq_ignore_ascii_case(&pkg.full_name))
+                .map(|(_, id)| id.to_string())
+        })
+}
+
+/// A copy of the mode `pkg`: its package, a folder named after it or, for a manual copy
+/// in a folder such as `BalatroMultiplayerSpeedrun-main`, the same Steamodded id
+fn is_copy_of_mode(copy: &InstalledCopy, pkg: &TsPackage, mode_id: Option<&str>) -> bool {
+    copy.package
+        .as_deref()
+        .is_some_and(|p| p.eq_ignore_ascii_case(&pkg.full_name))
+        || compact(&copy.folder) == compact(&pkg.name)
+        || compact(&copy.folder) == compact(&pkg.full_name)
+        || mode_id.is_some_and(|id| !copy.mod_id.is_empty() && copy.mod_id.eq_ignore_ascii_case(id))
+}
+
+/// A game mode copy of an official package, third party mods built on the API are not
+fn is_official_mode(copy: &InstalledCopy, detection: &Detection, packages: &[TsPackage]) -> bool {
+    copy.official
+        || gamemode_packages(packages)
+            .into_iter()
+            .any(|pkg| is_copy_of_mode(copy, pkg, mode_id_of(pkg, detection).as_deref()))
+}
+
+fn is_git_checkout(copy: &InstalledCopy) -> bool {
+    Path::new(&copy.path).join(".git").exists()
+}
+
 // ---------------------------------------------------------------------------
 // Detection
 // ---------------------------------------------------------------------------
@@ -424,6 +480,9 @@ pub struct StaleRow {
 pub struct Detection {
     pub copies: Vec<InstalledCopy>,
     pub stale_rows: Vec<StaleRow>,
+    /// Official modes the installed API lists in its menu
+    #[serde(skip)]
+    pub registry: Vec<RegistryMode>,
 }
 
 impl Detection {
@@ -555,7 +614,20 @@ pub fn detect(found: &[FoundMod], installed: &[InstalledMod], packages: &[TsPack
             })
         })
         .collect();
-    Detection { copies, stale_rows }
+    let mut detection = Detection {
+        copies,
+        stale_rows,
+        registry: Vec::new(),
+    };
+    if let Some(api) = detection.api_dir().or_else(|| {
+        detection
+            .of(Role::Api)
+            .next()
+            .map(|c| PathBuf::from(&c.path))
+    }) {
+        detection.registry = read_registry_modes(&api);
+    }
+    detection
 }
 
 // ---------------------------------------------------------------------------
@@ -614,6 +686,17 @@ pub fn plan_track(
     track: Track,
     gamemodes: &[String],
 ) -> Result<TrackPlan, String> {
+    build_plan(detection, packages, track, gamemodes, true)
+}
+
+/// `switching` plans the removal of the other track, the legacy upgrade leaves it alone
+fn build_plan(
+    detection: &Detection,
+    packages: &[TsPackage],
+    track: Track,
+    gamemodes: &[String],
+    switching: bool,
+) -> Result<TrackPlan, String> {
     let root = thunderstore::find_package(packages, track.package()).ok_or_else(|| {
         format!(
             "{} is not on Thunderstore right now, refresh and try again",
@@ -645,31 +728,48 @@ pub fn plan_track(
         }
     }
 
-    let remove: Vec<Removal> = match track {
-        Track::Legacy => detection
-            .copies
-            .iter()
-            .filter(|c| c.role != Role::Legacy)
-            .map(|c| {
-                Removal::of(
-                    c,
-                    match c.role {
-                        Role::Gamemode => "game modes need MultiplayerAPI".into(),
-                        _ => "MultiplayerAPI cannot be installed next to legacy Multiplayer".into(),
-                    },
-                )
-            })
-            .collect(),
-        Track::Api => detection
-            .of(Role::Legacy)
-            .map(|c| {
-                Removal::of(
-                    c,
-                    "legacy Multiplayer cannot be installed next to MultiplayerAPI".into(),
-                )
-            })
-            .collect(),
+    let other = match track {
+        Track::Legacy => Track::Api,
+        Track::Api => Track::Legacy,
     };
+    let preview = if switching {
+        uninstall_preview(detection, packages, other)
+    } else {
+        UninstallPreview {
+            track: other,
+            remove: Vec::new(),
+            keep: Vec::new(),
+        }
+    };
+    if let Some(checkout) = preview.keep.iter().find(|k| k.role != Role::Gamemode) {
+        return Err(format!(
+            "{} is a git checkout of {}, remove it yourself before switching tracks",
+            checkout.folder,
+            other.package()
+        ));
+    }
+    warnings.extend(
+        preview
+            .keep
+            .iter()
+            .map(|k| format!("{} stays, {}", k.folder, k.reason)),
+    );
+    let remove: Vec<Removal> = preview
+        .remove
+        .into_iter()
+        .map(|r| Removal {
+            reason: match (track, r.role) {
+                (Track::Legacy, Role::Gamemode) => "game modes need MultiplayerAPI".into(),
+                (Track::Legacy, _) => {
+                    "MultiplayerAPI cannot be installed next to legacy Multiplayer".into()
+                }
+                (Track::Api, _) => {
+                    "legacy Multiplayer cannot be installed next to MultiplayerAPI".into()
+                }
+            },
+            ..r
+        })
+        .collect();
 
     let mut replace: Vec<Removal> = detection
         .of(track.role())
@@ -677,14 +777,12 @@ pub fn plan_track(
         .map(|c| Removal::replacing(c, &root.full_name))
         .collect();
     for pkg in &modes {
+        let mode_id = mode_id_of(pkg, detection);
         replace.extend(
             detection
                 .of(Role::Gamemode)
                 .filter(|c| !c.official && !c.mod_id.is_empty())
-                .filter(|c| {
-                    compact(&c.folder) == compact(&pkg.name)
-                        || compact(&c.folder) == compact(&pkg.full_name)
-                })
+                .filter(|c| is_copy_of_mode(c, pkg, mode_id.as_deref()))
                 .map(|c| Removal::replacing(c, &pkg.full_name)),
         );
     }
@@ -708,10 +806,7 @@ pub fn plan_legacy_migration(
     if detection.legacy_manual().is_none() {
         return Err("There is no manual Multiplayer install to upgrade".into());
     }
-    let mut plan = plan_track(detection, packages, Track::Legacy, &[])?;
-    plan.remove.clear();
-    plan.needs_confirmation = false;
-    Ok(plan)
+    build_plan(detection, packages, Track::Legacy, &[], false)
 }
 
 fn removed_with(track: Track, role: Role) -> bool {
@@ -721,14 +816,47 @@ fn removed_with(track: Track, role: Role) -> bool {
     }
 }
 
-/// What uninstalling a track removes, the API takes its game modes with it
-pub fn uninstall_targets(detection: &Detection, track: Track) -> Vec<Removal> {
-    detection
+/// What uninstalling a track removes and what it leaves alone, so the confirmation can
+/// name every folder
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct UninstallPreview {
+    pub track: Track,
+    pub remove: Vec<Removal>,
+    /// Git checkouts and third party mods built on the API, they are never deleted
+    pub keep: Vec<Removal>,
+}
+
+/// The API takes the official game modes with it, mods of other authors that need the API
+/// and git checkouts stay
+pub fn uninstall_preview(
+    detection: &Detection,
+    packages: &[TsPackage],
+    track: Track,
+) -> UninstallPreview {
+    let mut preview = UninstallPreview {
+        track,
+        remove: Vec::new(),
+        keep: Vec::new(),
+    };
+    for copy in detection
         .copies
         .iter()
         .filter(|c| removed_with(track, c.role))
-        .map(|c| Removal::of(c, "uninstall".into()))
-        .collect()
+    {
+        if is_git_checkout(copy) {
+            preview
+                .keep
+                .push(Removal::of(copy, "it is a git checkout".into()));
+        } else if copy.role == Role::Gamemode && !is_official_mode(copy, detection, packages) {
+            preview.keep.push(Removal::of(
+                copy,
+                "it is not an official game mode and stops loading without MultiplayerAPI".into(),
+            ));
+        } else {
+            preview.remove.push(Removal::of(copy, "uninstall".into()));
+        }
+    }
+    preview
 }
 
 /// Rows of the track whose folders are already gone
@@ -840,20 +968,17 @@ pub fn track_info(detection: &Detection, packages: &[TsPackage], track: Track) -
 
 /// Packages built on the API, then modes the installed API marks as coming soon that no
 /// package provides yet
-pub fn gamemode_infos(
-    detection: &Detection,
-    packages: &[TsPackage],
-    registry: &[RegistryMode],
-) -> Vec<GameModeInfo> {
+pub fn gamemode_infos(detection: &Detection, packages: &[TsPackage]) -> Vec<GameModeInfo> {
+    let registry = &detection.registry;
     let gamemode_pkgs = gamemode_packages(packages);
     let mut infos = Vec::new();
     for pkg in &gamemode_pkgs {
-        let copy = detection.of(Role::Gamemode).find(|c| {
-            c.package
-                .as_deref()
-                .is_some_and(|p| p.eq_ignore_ascii_case(&pkg.full_name))
-                || compact(&c.folder) == compact(&pkg.name)
-        });
+        let mode_id = mode_id_of(pkg, detection);
+        // The official copy wins over a manual one when both exist
+        let copy = detection
+            .of(Role::Gamemode)
+            .filter(|c| is_copy_of_mode(c, pkg, mode_id.as_deref()))
+            .max_by_key(|c| c.official);
         let installed = copy.is_some();
         if pkg.is_deprecated && !installed {
             continue;
@@ -1541,8 +1666,11 @@ mod tests {
         assert!(mode.official, "official package files even without a row");
         assert!(detection.stale_rows.is_empty());
 
-        let registry = read_registry_modes(&detection.api_dir().unwrap());
-        let infos = gamemode_infos(&detection, &packages, &registry);
+        assert_eq!(
+            detection.registry,
+            read_registry_modes(&detection.api_dir().unwrap())
+        );
+        let infos = gamemode_infos(&detection, &packages);
         let titles: Vec<(&str, bool, bool)> = infos
             .iter()
             .map(|i| (i.title.as_str(), i.installed, i.coming_soon))
@@ -1558,7 +1686,9 @@ mod tests {
         assert!(infos[0].update_available);
         assert_eq!(infos[0].mod_id.as_deref(), Some("MultiplayerSPDRN"));
         // Without registry data only the packages are listed
-        assert_eq!(gamemode_infos(&detection, &packages, &[]).len(), 1);
+        let mut detection = detection;
+        detection.registry.clear();
+        assert_eq!(gamemode_infos(&detection, &packages).len(), 1);
     }
 
     #[test]
@@ -1613,9 +1743,105 @@ mod tests {
         assert!(plan_track(&detection, &packages, Track::Api, &["Nope".into()]).is_err());
         assert!(plan_track(&detection, &[], Track::Api, &[]).is_err());
 
-        let targets = uninstall_targets(&detection, Track::Api);
-        assert_eq!(targets.len(), 2, "game modes go with the API");
-        assert!(uninstall_targets(&detection, Track::Legacy).is_empty());
+        let preview = uninstall_preview(&detection, &packages, Track::Api);
+        assert_eq!(preview.remove.len(), 2, "game modes go with the API");
+        assert!(preview.keep.is_empty());
+        let preview = uninstall_preview(&detection, &packages, Track::Legacy);
+        assert!(preview.remove.is_empty() && preview.keep.is_empty());
+    }
+
+    #[test]
+    fn api_uninstall_leaves_third_party_mods_and_git_checkouts() {
+        let td = tempfile::tempdir().unwrap();
+        let mods = td.path().join("Mods");
+        let packages = fixture_packages();
+        api_package(&mods, &[]);
+        speedrun_package(&mods);
+        write(
+            &mods.join("MyMPMode/MyMPMode.json"),
+            r#"{"id":"MyMPMode","dependencies":["MultiplayerAPI"]}"#,
+        );
+        let addon = mods.join("MyMPAddon");
+        write(
+            &addon.join("MyMPAddon.json"),
+            r#"{"id":"MyMPAddon","dependencies":["MultiplayerAPI (>=1.0)"]}"#,
+        );
+        std::fs::create_dir_all(addon.join(".git")).unwrap();
+        let detection = detect(&scan_mods_dir(&mods), &[], &packages);
+        assert_eq!(detection.of(Role::Gamemode).count(), 3);
+
+        let preview = uninstall_preview(&detection, &packages, Track::Api);
+        let folders =
+            |list: &[Removal]| -> Vec<String> { list.iter().map(|r| r.folder.clone()).collect() };
+        assert_eq!(
+            folders(&preview.remove),
+            [
+                "BalatroMultiplayer-MultiplayerAPI",
+                "BalatroMultiplayer-MultiplayerSpeedrun"
+            ]
+        );
+        assert_eq!(folders(&preview.keep), ["MyMPAddon", "MyMPMode"]);
+
+        // Switching to legacy removes the same official copies and keeps the rest
+        let plan = plan_track(&detection, &packages, Track::Legacy, &[]).expect("plan");
+        assert_eq!(folders(&plan.remove), folders(&preview.remove));
+        assert_eq!(plan.warnings.len(), 2);
+
+        // A git checkout of the API itself is never deleted, a switch is refused
+        std::fs::create_dir_all(mods.join("BalatroMultiplayer-MultiplayerAPI/.git")).unwrap();
+        let detection = detect(&scan_mods_dir(&mods), &[], &packages);
+        let preview = uninstall_preview(&detection, &packages, Track::Api);
+        assert_eq!(
+            folders(&preview.remove),
+            ["BalatroMultiplayer-MultiplayerSpeedrun"]
+        );
+        assert!(plan_track(&detection, &packages, Track::Legacy, &[]).is_err());
+    }
+
+    #[test]
+    fn manual_game_mode_copies_match_by_mod_id() {
+        let td = tempfile::tempdir().unwrap();
+        let mods = td.path().join("Mods");
+        let packages = fixture_packages();
+        api_package(&mods, &[]);
+        write(
+            &mods.join("BalatroMultiplayerSpeedrun-main/BalatroSpeedrunning.json"),
+            r#"{"id":"MultiplayerSPDRN","version":"1.0.0","dependencies":["MultiplayerAPI"]}"#,
+        );
+        let detection = detect(&scan_mods_dir(&mods), &[], &packages);
+
+        let infos = gamemode_infos(&detection, &packages);
+        let speedrun = infos
+            .iter()
+            .find(|i| i.mod_id.as_deref() == Some("MultiplayerSPDRN"))
+            .unwrap();
+        assert!(speedrun.installed, "the manual copy counts as installed");
+
+        let plan = plan_track(
+            &detection,
+            &packages,
+            Track::Api,
+            &["MultiplayerSpeedrun".to_string()],
+        )
+        .expect("plan");
+        assert_eq!(plan.replace.len(), 1);
+        assert_eq!(plan.replace[0].folder, "BalatroMultiplayerSpeedrun-main");
+        assert_eq!(
+            plan.replace[0].replaced_by.as_deref(),
+            Some("BalatroMultiplayer-MultiplayerSpeedrun")
+        );
+        // A manual copy of an official mode goes with the API
+        let preview = uninstall_preview(&detection, &packages, Track::Api);
+        assert_eq!(preview.remove.len(), 2);
+
+        // The id is also known without the API registry
+        let mut detection = detection;
+        detection.registry.clear();
+        assert!(
+            gamemode_infos(&detection, &packages)
+                .iter()
+                .any(|i| i.installed)
+        );
     }
 
     #[test]

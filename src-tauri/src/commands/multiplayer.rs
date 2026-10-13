@@ -12,7 +12,7 @@ use crate::commands::install::{self as install_cmd, InstalledCatalogMod, PlanRun
 use crate::install_plan::{self, InstallPlan, InstallSource};
 use crate::multiplayer::{
     self, ApiInstall, Detection, FoundMod, GameModeInfo, InstalledCopy, LaunchPlatform,
-    ReadinessCheck, Removal, Role, Track, TrackInfo, TrackPlan,
+    ReadinessCheck, Removal, Role, Track, TrackInfo, TrackPlan, UninstallPreview,
 };
 use crate::state::AppState;
 use crate::thunderstore::{self, TsPackage};
@@ -35,6 +35,8 @@ pub struct MultiplayerStatus {
     /// A legacy install from outside Thunderstore, offered an upgrade
     pub legacy_manual: Option<InstalledCopy>,
     pub gamemodes: Vec<GameModeInfo>,
+    /// What uninstalling each track removes and leaves alone
+    pub uninstall: Vec<UninstallPreview>,
     pub readiness: Vec<ReadinessCheck>,
     /// DLLs BMM copied into a Proton save folder, removed with the API track
     pub copied_dlls: Vec<String>,
@@ -153,10 +155,6 @@ pub async fn multiplayer_status(
     };
     let platform = LaunchPlatform::current(linux_prefix.as_deref());
     let detection = &local.detection;
-    let registry = detection
-        .api_dir()
-        .map(|dir| multiplayer::read_registry_modes(&dir))
-        .unwrap_or_default();
 
     let check_steam = detection.has(Track::Api);
     let steam_running = if check_steam {
@@ -199,7 +197,11 @@ pub async fn multiplayer_status(
         active_track: detection.active_track(),
         conflict: detection.conflict(),
         legacy_manual: detection.legacy_manual().cloned(),
-        gamemodes: multiplayer::gamemode_infos(detection, &local.packages, &registry),
+        gamemodes: multiplayer::gamemode_infos(detection, &local.packages),
+        uninstall: [Track::Legacy, Track::Api]
+            .into_iter()
+            .map(|track| multiplayer::uninstall_preview(detection, &local.packages, track))
+            .collect(),
         readiness,
         copied_dlls: copied
             .iter()
@@ -293,8 +295,12 @@ pub async fn multiplayer_uninstall(
     let local = local_state(&state.db, false).await?;
     let mut removed = Vec::new();
     let mut result = Ok(());
-    for target in multiplayer::uninstall_targets(&local.detection, track) {
-        match remove_copy(&state.db, &target).await {
+    let preview = multiplayer::uninstall_preview(&local.detection, &local.packages, track);
+    for kept in &preview.keep {
+        log::info!("Leaving {} in place, {}", kept.folder, kept.reason);
+    }
+    for target in &preview.remove {
+        match remove_copy(&state.db, target).await {
             Ok(label) => removed.push(label),
             Err(e) => {
                 result = Err(e);
@@ -331,9 +337,16 @@ pub async fn multiplayer_uninstall(
     })
 }
 
-/// Deletes a copy's folder and its row, returns the name shown to the user
+/// Deletes a copy's folder and its row, returns the name shown to the user. Git checkouts
+/// are never deleted
 async fn remove_copy(db: &Mutex<Database>, removal: &Removal) -> Result<String, String> {
     let path = PathBuf::from(&removal.path);
+    if path.join(".git").exists() {
+        return Err(format!(
+            "{} is a git checkout, BMM leaves it alone",
+            removal.folder
+        ));
+    }
     if path.exists() {
         map_error(bmm_lib::installer::uninstall_mod(path).await)?;
     }
@@ -681,6 +694,7 @@ mod tests {
                 disabled: false,
             }],
             stale_rows: Vec::new(),
+            registry: Vec::new(),
         };
         multiplayer::plan_legacy_migration(&detection, &packages).unwrap()
     }
