@@ -3,10 +3,11 @@
   import { onMount, onDestroy } from "svelte";
   import { openExternal } from "$lib/opener";
   import { updatePopupStore } from "../stores/modStore";
+  import { APP_RELEASES_URL } from "../constants/links";
 
   async function handleDownload() {
     try {
-      await openExternal("https://balatro-mod-manager.dasguney.com/download");
+      await openExternal(APP_RELEASES_URL);
     } catch (e) {
       console.error("Failed to open download page:", e);
     }

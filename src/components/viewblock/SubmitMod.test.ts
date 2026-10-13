@@ -2,6 +2,12 @@ import { render, screen, fireEvent } from "@testing-library/svelte";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import SubmitMod from "./SubmitMod.svelte";
 import { openExternal } from "$lib/opener";
+import {
+  INDEX_NEW_MOD_URL,
+  INDEX_README_URL,
+  INDEX_REPO_URL,
+  INDEX_SCHEMA_URL,
+} from "../../constants/links";
 
 vi.mock("$lib/opener", () => ({
   openExternal: vi.fn(),
@@ -12,29 +18,31 @@ describe("SubmitMod view", () => {
     vi.clearAllMocks();
   });
 
-  it("opens the submission helper when the button is clicked", async () => {
+  it.each([
+    [/read submission rules/i, INDEX_README_URL],
+    [/view schema/i, INDEX_SCHEMA_URL],
+    [/add mod files/i, INDEX_NEW_MOD_URL],
+    [/view mod index repo/i, INDEX_REPO_URL],
+  ])("button %s opens %s", async (name, url) => {
     render(SubmitMod);
 
-    const button = screen.getByRole("button", {
-      name: /open submission helper/i,
-    });
-    await fireEvent.click(button);
+    await fireEvent.click(screen.getByRole("button", { name }));
 
-    expect(openExternal).toHaveBeenCalledWith(
-      "https://bmi-helper.dasguney.com/",
-    );
+    expect(openExternal).toHaveBeenCalledWith(url);
   });
 
-  it("opens the mod index repo when the repo button is clicked", async () => {
+  it("points at the kasimeka mod index and never at the retired helper", async () => {
     render(SubmitMod);
 
-    const button = screen.getByRole("button", {
-      name: /view mod index repo/i,
-    });
-    await fireEvent.click(button);
+    for (const button of screen.getAllByRole("button")) {
+      await fireEvent.click(button);
+    }
 
-    expect(openExternal).toHaveBeenCalledWith(
-      "https://github.com/skyline69/Balatro-Mod-Index",
-    );
+    const opened = vi.mocked(openExternal).mock.calls.map(([url]) => url);
+    expect(opened.length).toBeGreaterThan(0);
+    for (const url of opened) {
+      expect(url).toContain("github.com/kasimeka/balatro-mod-index");
+      expect(url).not.toContain("dasguney");
+    }
   });
 });

@@ -7,7 +7,7 @@ edition = "2024"
 keywords = ["gaming", "mods", "balatro", "manager", "tauri"]
 categories = ["games", "development-tools", "gui"]
 readme = "README.md"
-repository = "https://github.com/skyline69/balatro-mod-manager"
+repository = "https://github.com/rursache/balatro-mod-manager"
 publish = false
 
 

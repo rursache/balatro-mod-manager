@@ -1,11 +1,14 @@
 <script lang="ts">
-  import { Upload, ExternalLink } from "lucide-svelte";
+  import { Upload, ExternalLink, FileCode } from "lucide-svelte";
   import Github from "../GithubIcon.svelte";
   import { openExternal } from "$lib/opener";
-
-  const HELPER_URL = "https://bmi-helper.dasguney.com/";
-  const INDEX_REPO_URL = "https://github.com/skyline69/Balatro-Mod-Index";
-  const README_URL = `${INDEX_REPO_URL}/blob/main/README.md`;
+  import {
+    INDEX_NEW_MOD_URL,
+    INDEX_README_URL,
+    INDEX_REPO,
+    INDEX_REPO_URL,
+    INDEX_SCHEMA_URL,
+  } from "../../constants/links";
 
   const open = async (url: string) => {
     try {
@@ -25,35 +28,50 @@
       </div>
 
       <p>
-        Want to see your mod in the manager? The Submission Helper walks you
-        through adding it to the mod index, so you don't have to touch git or
-        write any config by hand.
+        Want to see your mod in the manager? The catalog comes straight from the
+        community mod index on GitHub ({INDEX_REPO}), so adding your mod is a
+        pull request to that repository. GitHub's web editor can create the fork
+        and the pull request for you.
       </p>
 
       <div>
         <h3>How it works</h3>
         <ol>
-          <li>Read the submission rules.</li>
-          <li>Open the Submission Helper in your browser.</li>
-          <li>Fill in your mod's details (name, author, repository, etc.).</li>
-          <li>The helper prepares a submission to the mod index for you.</li>
-          <li>The maintainers review it, then your mod shows up in BMM.</li>
+          <li>Read the submission rules and the meta.json schema.</li>
+          <li>
+            Click "Add Mod Files" (GitHub forks the index for you) or fork it
+            yourself.
+          </li>
+          <li>
+            Add <code>mods/Author@ModName/meta.json</code>,
+            <code>description.md</code> and optionally
+            <code>thumbnail.jpg</code>.
+          </li>
+          <li>Propose the changes to open a pull request.</li>
+          <li>The maintainers review and merge it, then your mod shows up.</li>
         </ol>
       </div>
       <div class="button-container">
         <button
           class="action-button readme-button"
-          on:click={() => open(README_URL)}
+          on:click={() => open(INDEX_README_URL)}
         >
           <ExternalLink size={20} />
           <span>Read Submission Rules</span>
         </button>
         <button
-          class="action-button submit-button"
-          on:click={() => open(HELPER_URL)}
+          class="action-button schema-button"
+          on:click={() => open(INDEX_SCHEMA_URL)}
         >
-          <ExternalLink size={20} />
-          <span>Open Submission Helper</span>
+          <FileCode size={20} />
+          <span>View Schema</span>
+        </button>
+        <button
+          class="action-button submit-button"
+          on:click={() => open(INDEX_NEW_MOD_URL)}
+        >
+          <Upload size={20} />
+          <span>Add Mod Files</span>
         </button>
         <button
           class="action-button repo-button"
@@ -193,6 +211,21 @@
 
   .readme-button:hover {
     background-color: #b80500;
+  }
+
+  .schema-button {
+    background-color: #4a7ec7;
+    color: #fff;
+  }
+
+  .schema-button:hover {
+    background-color: #3c6aab;
+  }
+
+  code {
+    font-family: monospace;
+    font-size: 0.9em;
+    color: #fdcf51;
   }
 
   .repo-button {

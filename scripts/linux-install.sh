@@ -132,7 +132,7 @@ else
     BUILD_DIR=$(mktemp -d)
     echo -e "${YELLOW}Using temporary directory: $BUILD_DIR${NC}"
     echo -e "${YELLOW}1. Cloning repository...${NC}"
-    git clone https://github.com/skyline69/balatro-mod-manager.git "$BUILD_DIR/bmm"
+    git clone https://github.com/rursache/balatro-mod-manager.git "$BUILD_DIR/bmm"
     REPO_DIR="$BUILD_DIR/bmm"
     cd "$REPO_DIR"
 fi
@@ -146,7 +146,7 @@ DOWNLOAD_DIR=$(mktemp -d)
 FLATPAK_BUNDLE="$DOWNLOAD_DIR/balatro-mod-manager.flatpak"
 RELEASE_URL=""
 RELEASE_JSON=""
-if RELEASE_JSON=$(curl -fsSL "https://api.github.com/repos/skyline69/balatro-mod-manager/releases" 2>/dev/null); then
+if RELEASE_JSON=$(curl -fsSL "https://api.github.com/repos/rursache/balatro-mod-manager/releases" 2>/dev/null); then
     RELEASE_URL=$(printf '%s' "$RELEASE_JSON" | \
         grep -Eo '"browser_download_url":\s*"[^"]+\.flatpak"' | \
         head -n1 | cut -d '"' -f4 || true)

@@ -146,7 +146,7 @@ New-Item -Path $BUILD_DIR -ItemType Directory -Force | Out-Null
 try {
     # Shallow clone keeps downloads small and avoids long paths in temp dirs
     $clonePath = Join-Path $BUILD_DIR "balatro-mod-manager"
-    Invoke-Step "1. Cloning repository..." { git clone --depth 1 https://github.com/skyline69/balatro-mod-manager.git $clonePath }
+    Invoke-Step "1. Cloning repository..." { git clone --depth 1 https://github.com/rursache/balatro-mod-manager.git $clonePath }
 } catch {
     Write-Host "Error during repository cloning: $_" -ForegroundColor $RED
     Cleanup -Directory $BUILD_DIR

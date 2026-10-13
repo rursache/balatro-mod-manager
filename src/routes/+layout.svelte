@@ -20,6 +20,7 @@
   import UpdateAvailablePopup from "../components/UpdateAvailablePopup.svelte";
   import RecoveryScreen from "../components/RecoveryScreen.svelte";
   import { updatePromptDisabled } from "../stores/update";
+  import { APP_LATEST_RELEASE_API, APP_TAGS_API } from "../constants/links";
   import { invoke } from "@tauri-apps/api/core";
   import { startControllerNavigation } from "../utils/controllerNavigation";
 
@@ -59,27 +60,19 @@
       if ($updatePromptDisabled) return;
       const cur = await invoke<string>("get_app_version");
       let tag = "";
-      // Prefer tags API to avoid 404s when no releases exist
-      const tagRes = await fetch(
-        "https://api.github.com/repos/skyline69/balatro-mod-manager/tags?per_page=1",
-        { headers: { Accept: "application/vnd.github+json" } },
-      );
-      if (tagRes.ok) {
-        const tags = await tagRes.json();
-        if (Array.isArray(tags) && tags.length > 0) {
-          tag = tags[0].name || "";
-        }
+      const headers = { Accept: "application/vnd.github+json" };
+      const relRes = await fetch(APP_LATEST_RELEASE_API, { headers });
+      if (relRes.ok) {
+        const release = await relRes.json();
+        tag = release?.tag_name || "";
       }
       if (!tag) {
-        // Fallback: newest release from list (handles repos without 'latest')
-        const relRes = await fetch(
-          "https://api.github.com/repos/skyline69/balatro-mod-manager/releases?per_page=1",
-          { headers: { Accept: "application/vnd.github+json" } },
-        );
-        if (relRes.ok) {
-          const list = await relRes.json();
-          if (Array.isArray(list) && list.length > 0) {
-            tag = list[0].tag_name || list[0].name || "";
+        // No published release yet, fall back to the newest tag
+        const tagRes = await fetch(APP_TAGS_API, { headers });
+        if (tagRes.ok) {
+          const tags = await tagRes.json();
+          if (Array.isArray(tags) && tags.length > 0) {
+            tag = tags[0].name || "";
           }
         }
       }

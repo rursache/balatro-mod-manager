@@ -19,7 +19,7 @@
       <li>Steam Deck friendly: works in Gaming/Desktop mode with no extra system packages.</li>
     </ul>
   </description>
-  <url type="homepage">https://github.com/skyline69/balatro-mod-manager</url>
+  <url type="homepage">https://github.com/rursache/balatro-mod-manager</url>
   <releases>
     <release version="0.4.1"/>
   </releases>

@@ -73,7 +73,7 @@ echo -e "${YELLOW}Creating temporary build directory: ${BUILD_DIR}${NC}"
 
 # Clone the repository
 echo -e "${YELLOW}1. Cloning repository...${NC}"
-git clone https://github.com/skyline69/balatro-mod-manager.git "${BUILD_DIR}/balatro-mod-manager" || { 
+git clone https://github.com/rursache/balatro-mod-manager.git "${BUILD_DIR}/balatro-mod-manager" || { 
     echo -e "${RED}Git clone failed${NC}"
     rm -rf "${BUILD_DIR}"
     exit 1

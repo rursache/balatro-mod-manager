@@ -37,7 +37,7 @@ cleanup() {
 trap cleanup ERR
 
 # Check if release exists before making changes
-DEB_URL="https://github.com/skyline69/balatro-mod-manager/releases/download/v${NEW_VERSION}/Balatro.Mod.Manager_${NEW_VERSION}_amd64.deb"
+DEB_URL="https://github.com/rursache/balatro-mod-manager/releases/download/v${NEW_VERSION}/Balatro.Mod.Manager_${NEW_VERSION}_amd64.deb"
 echo "Checking if release v$NEW_VERSION exists..."
 HTTP_STATUS=$(curl -sI -o /dev/null -w "%{http_code}" "$DEB_URL")
 if [ "$HTTP_STATUS" != "200" ] && [ "$HTTP_STATUS" != "302" ]; then
