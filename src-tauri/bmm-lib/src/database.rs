@@ -764,6 +764,64 @@ impl Database {
         Ok(final_name)
     }
 
+    /// Frees `name` for an index install when a row from another source holds it, that
+    /// row is renamed like a collision (`Name (Namespace)`) and Thunderstore rows that
+    /// depend on it follow. Returns the new name, None when nothing had to move
+    pub fn free_name_for_index_mod(&mut self, name: &str) -> Result<Option<String>, AppError> {
+        let holder = {
+            let mut stmt = self.conn.prepare_cached(&format!(
+                "SELECT {INSTALLED_MOD_COLUMNS} FROM installed_mods
+                 WHERE lower(name) = lower(?1) AND source != ?2 LIMIT 1"
+            ))?;
+            let mut rows = stmt.query([name, SOURCE_INDEX])?;
+            match rows.next()? {
+                Some(row) => InstalledMod::from_row(row)?,
+                None => return Ok(None),
+            }
+        };
+        let taken = |candidate: &str| -> bool {
+            self.conn
+                .query_row(
+                    "SELECT 1 FROM installed_mods WHERE lower(name) = lower(?1)",
+                    [candidate],
+                    |_| Ok(()),
+                )
+                .is_ok()
+        };
+        let qualifier = holder.source_id.as_deref().unwrap_or(&holder.source);
+        let renamed = disambiguated_name(&holder.name, qualifier, taken);
+        let dependents: Vec<InstalledMod> = self
+            .get_installed_mods()?
+            .into_iter()
+            .filter(|m| m.source == SOURCE_THUNDERSTORE && m.dependencies.contains(&holder.name))
+            .collect();
+
+        let tx = self.conn.transaction()?;
+        tx.execute(
+            "UPDATE installed_mods SET name = ?1 WHERE name = ?2",
+            [&renamed, &holder.name],
+        )?;
+        for dependent in dependents {
+            let deps: Vec<&str> = dependent
+                .dependencies
+                .iter()
+                .map(|d| {
+                    if *d == holder.name {
+                        renamed.as_str()
+                    } else {
+                        d
+                    }
+                })
+                .collect();
+            tx.execute(
+                "UPDATE installed_mods SET dependencies = ?1 WHERE name = ?2",
+                rusqlite::params![serde_json::to_string(&deps)?, dependent.name],
+            )?;
+        }
+        tx.commit()?;
+        Ok(Some(renamed))
+    }
+
     /// Moves the row `name` to another source, for source switches and the
     /// legacy Multiplayer migration. The row keeps its name and loses its
     /// orphaned flag. Fails when another row already tracks the target package
@@ -1492,6 +1550,47 @@ mod tests {
         assert_eq!(ts.thunderstore_namespace(), Some("BalatroMultiplayer"));
         assert_eq!(ts.current_version.as_deref(), Some("0.5.7"));
         assert!(db.get_installed_by_source_id("Nobody-Nothing")?.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn index_install_renames_the_thunderstore_row_holding_its_name() -> Result<(), AppError> {
+        let mut db = create_memory_db()?;
+        db.add_installed_mod_with_source(
+            "Foo",
+            "/p/B-Foo",
+            &[],
+            Some("1.0.0".into()),
+            SOURCE_THUNDERSTORE,
+            Some("B-Foo"),
+        )?;
+        db.add_installed_mod_with_source(
+            "Bar",
+            "/p/C-Bar",
+            &["Foo".into(), "Steamodded".into()],
+            None,
+            SOURCE_THUNDERSTORE,
+            Some("C-Bar"),
+        )?;
+        db.add_installed_mod("Baz", "/p/Baz", &[], None)?;
+
+        assert_eq!(db.free_name_for_index_mod("Baz")?, None);
+        assert_eq!(db.free_name_for_index_mod("Missing")?, None);
+        assert_eq!(
+            db.free_name_for_index_mod("foo")?.as_deref(),
+            Some("Foo (B)")
+        );
+        assert_eq!(db.free_name_for_index_mod("Foo")?, None);
+
+        let moved = db
+            .get_installed_by_source_id("B-Foo")?
+            .expect("still tracked");
+        assert_eq!(moved.name, "Foo (B)");
+        assert_eq!(moved.path, "/p/B-Foo");
+        assert_eq!(
+            db.get_mod_details("Bar")?.dependencies,
+            ["Foo (B)", "Steamodded"]
+        );
         Ok(())
     }
 

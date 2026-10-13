@@ -1249,11 +1249,18 @@ async fn record_install(
 ) -> Result<(String, usize), String> {
     let path_str = path.to_string_lossy().to_string();
     let (recorded, previous_path, protected_paths) = {
-        let db = db.lock().unwrap_or_else(|e| e.into_inner());
+        let mut db = db.lock().unwrap_or_else(|e| e.into_inner());
         let installed = map_error(db.get_installed_mods())?;
         let (recorded, previous) = match kind {
             RecordKind::Index => {
-                let previous = installed.iter().find(|m| m.name == name);
+                // A Thunderstore package holding this name is another mod, it moves to
+                // "Name (Namespace)" and keeps its folder
+                if let Some(renamed) = map_error(db.free_name_for_index_mod(name))? {
+                    log::info!("Renamed the Thunderstore row {name} to {renamed}");
+                }
+                let previous = installed
+                    .iter()
+                    .find(|m| m.name == name && m.source == SOURCE_INDEX);
                 map_error(db.add_installed_mod(name, &path_str, dependencies, current_version))?;
                 (name.to_string(), previous)
             }
@@ -1294,7 +1301,8 @@ async fn record_install(
         let previous_path = previous.map(|m| PathBuf::from(&m.path));
         let protected_paths: Vec<PathBuf> = installed
             .iter()
-            .filter(|m| m.name != recorded && !m.path.trim().is_empty())
+            .filter(|m| !previous.is_some_and(|p| std::ptr::eq(p, *m)))
+            .filter(|m| !m.path.trim().is_empty())
             .map(|m| PathBuf::from(&m.path))
             .collect();
         (recorded, previous_path, protected_paths)
@@ -1890,6 +1898,53 @@ mod tests {
             .find(|r| r.source == SOURCE_THUNDERSTORE)
             .unwrap();
         assert_eq!(ts.current_version.as_deref(), Some("1.2.0"));
+    }
+
+    #[test]
+    fn index_install_never_replaces_a_thunderstore_row_with_the_same_name() {
+        let td = tempfile::tempdir().unwrap();
+        let mods = td.path().join("Mods");
+        let ts_dir = mods.join("B-Foo");
+        let index_dir = mods.join("Foo");
+        make_mod(&ts_dir);
+        make_mod(&index_dir);
+        let db = temp_db(td.path());
+        db.lock()
+            .unwrap()
+            .add_installed_mod_with_source(
+                "Foo",
+                &ts_dir.to_string_lossy(),
+                &[],
+                Some("1.0.0".into()),
+                SOURCE_THUNDERSTORE,
+                Some("B-Foo"),
+            )
+            .unwrap();
+
+        let (name, removed) = tauri::async_runtime::block_on(record_install(
+            &db,
+            "Foo",
+            &index_dir,
+            &[],
+            Some("2.0".into()),
+            RecordKind::Index,
+            std::slice::from_ref(&mods),
+        ))
+        .expect("record");
+
+        assert_eq!((name.as_str(), removed), ("Foo", 0));
+        assert!(ts_dir.exists(), "the other package keeps its folder");
+        let rows = db.lock().unwrap().get_installed_mods().unwrap();
+        assert_eq!(rows.len(), 2);
+        let ts = rows
+            .iter()
+            .find(|r| r.source == SOURCE_THUNDERSTORE)
+            .unwrap();
+        assert_eq!(ts.name, "Foo (B)");
+        assert_eq!(ts.path, ts_dir.to_string_lossy());
+        let index = rows.iter().find(|r| r.source == SOURCE_INDEX).unwrap();
+        assert_eq!(index.name, "Foo");
+        assert_eq!(index.path, index_dir.to_string_lossy());
     }
 
     #[test]
